@@ -2,6 +2,28 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { terminateSmokeContainers, smokeEgressRules, redactDiagnostic } from './smoke.mjs';
+import { compose } from './compose.mjs';
+
+test('fresh PostgreSQL bootstrap clients and temporary servers share each isolated port and writable default socket', () => {
+  const environment = Object.fromEntries(['postiz', 'gateway', 'worker', 'temporal'].map(name =>
+    [`CREATOR_IMAGE_${name.toUpperCase()}`, `ghcr.io/kalvisan/ordersmp-creator-studio-${name}@sha256:${'a'.repeat(64)}`]));
+  const { services } = compose(environment);
+  for (const [name, uid, port] of [['postgres', 18002, 15432], ['temporalpg', 18005, 15433]]) {
+    const service = services[name];
+    // The official entrypoint clears PGHOST and uses compiled /var/run/postgresql.
+    // Alpine resolves /var/run to /run; PGPORT also controls bootstrap psql.
+    assert.equal(service.environment.PGPORT, String(port));
+    assert.equal(service.command[service.command.indexOf('-p') + 1], String(port));
+    assert.ok(service.command.includes('unix_socket_directories=/var/run/postgresql'));
+    assert.ok(service.tmpfs.includes(`/run/postgresql:rw,nosuid,nodev,noexec,size=4m,uid=${uid},gid=${uid},mode=0700`));
+    assert.ok(service.tmpfs.includes(`/tmp:rw,nosuid,nodev,noexec,size=128m,uid=${uid},gid=${uid},mode=0700`));
+    assert.ok(service.command.includes('listen_addresses=127.0.0.1'));
+    assert.equal(service.healthcheck.test[service.healthcheck.test.indexOf('-p') + 1], String(port));
+    assert.equal(service.read_only, true);
+    assert.equal(service.user, `${uid}:${uid}`);
+    assert.deepEqual(service.cap_drop, ['ALL']);
+  }
+});
 
 test('setup diagnostics redact credentials and bound child stderr', () => {
   const token = 'fixture-sensitive-value-0123456789abcdef';

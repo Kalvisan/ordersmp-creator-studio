@@ -23,3 +23,4 @@ dist
 reports
 studio/deploy/smoke.mjs
 studio/deploy/smoke.test.mjs
+studio/deploy/compose.mjs

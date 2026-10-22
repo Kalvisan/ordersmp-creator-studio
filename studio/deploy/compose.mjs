@@ -49,10 +49,12 @@ export function compose(environment = process.env) {
     healthcheck: health(['CMD', 'node', '-e', "fetch('http://127.0.0.1:4007/auth/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]) };
   services.postiz.volumes.push(mount(data('media/delivery'), '/media/delivery', true));
   const pg = (name, uid, port, user, db) => ({ ...base(name, uid, '512M', 0.1, 128, images.postgres),
-    environment: { PGDATA: '/var/lib/postgresql/data/pgdata', POSTGRES_USER: user, POSTGRES_DB: db,
+    tmpfs: [`/tmp:rw,nosuid,nodev,noexec,size=128m,uid=${uid},gid=${uid},mode=0700`,
+      `/run/postgresql:rw,nosuid,nodev,noexec,size=4m,uid=${uid},gid=${uid},mode=0700`],
+    environment: { PGDATA: '/var/lib/postgresql/data/pgdata', POSTGRES_USER: user, POSTGRES_DB: db, PGPORT: String(port),
       POSTGRES_INITDB_ARGS: '--auth-host=scram-sha-256 --auth-local=trust', POSTGRES_HOST_AUTH_METHOD: 'scram-sha-256' },
     command: ['postgres', '-c', 'listen_addresses=127.0.0.1', '-p', String(port),
-      '-c', 'unix_socket_directories=/tmp', '-c', 'shared_buffers=128MB',
+      '-c', 'unix_socket_directories=/var/run/postgresql', '-c', 'shared_buffers=128MB',
       '-c', 'max_connections=80', '-c', 'password_encryption=scram-sha-256'],
     healthcheck: health(['CMD', 'pg_isready', '-h', '127.0.0.1', '-p', String(port), '-U', user, '-d', db]) });
   services.postgres = pg('postgres', 18002, 15432, 'postiz', 'postiz');
