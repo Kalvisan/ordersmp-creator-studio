@@ -1,8 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { terminateSmokeContainers, smokeEgressRules, redactDiagnostic, diagnosticTail, structuredErrors } from './smoke.mjs';
+import { terminateSmokeContainers, smokeEgressRules, redactDiagnostic, diagnosticTail, structuredErrors, assertionDiagnostic } from './smoke.mjs';
 import { compose } from './compose.mjs';
+
+test('HTTP assertion diagnostics retain status and source line without response bodies or cookies', () => {
+  const error = { actual: 'secret response body', expected: /secret-cookie/, operator: 'match',
+    stack: 'AssertionError secret-state\n at smoke (file:///app/studio/deploy/smoke.mjs:270:12)' };
+  assert.deepEqual(assertionDiagnostic(error), { line: 270, operator: 'match', actual: 'string', expected: 'object' });
+  assert.deepEqual(assertionDiagnostic({ actual: 302, expected: 200, operator: 'strictEqual' }),
+    { line: undefined, operator: 'strictEqual', actual: 302, expected: 200 });
+});
 
 test('fresh PostgreSQL bootstrap clients and temporary servers share each isolated port and writable default socket', () => {
   const environment = Object.fromEntries(['postiz', 'gateway', 'worker', 'temporal'].map(name =>

@@ -55,6 +55,12 @@ export function structuredErrors(value, secrets = generatedSecrets) {
   }
   return errors.slice(-3);
 }
+export function assertionDiagnostic(error) {
+  const line = /smoke\.mjs:(\d+):\d+/.exec(String(error.stack || ''))?.[1];
+  const scalar = value => typeof value === 'number' || typeof value === 'boolean' ? value : typeof value;
+  return { line: line ? Number(line) : undefined, operator: error.operator,
+    actual: scalar(error.actual), expected: scalar(error.expected) };
+}
 function command(executable, args, options = {}) {
   const { combineOutput = false, ...spawnOptions } = options;
   const result = spawnSync(executable, args, { encoding: 'utf8', timeout: 120000,
@@ -255,11 +261,14 @@ export async function smoke(artifactRoot) {
     // Outer TLS and public-origin access are tested by the managed host vhost.
     // This probe tests the inner loopback hop without printing responses/cookies.
     const request = (path, args = [], host = 'studio.ordersmp.net') => {
+      report.httpProbe = { path, host };
       const output = root(['curl', '--silent', '--show-error', '--max-time', '20', '--noproxy', '*',
         '--header', `Host: ${host}`, '--include', ...args, `http://127.0.0.1:8444${path}`]);
       const boundary = output.indexOf('\r\n\r\n') >= 0 ? '\r\n\r\n' : '\n\n';
       const index = output.indexOf(boundary), headers = output.slice(0, index), body = output.slice(index + boundary.length);
-      return { status: Number(/^HTTP\/\S+ (\d+)/.exec(headers)?.[1]), headers, body };
+      const status = Number(/^HTTP\/\S+ (\d+)/.exec(headers)?.[1]);
+      report.httpProbe.status = status;
+      return { status, headers, body };
     };
     report.stage = 'http-auth';
     const portal = request('/creator/');
@@ -295,6 +304,7 @@ export async function smoke(artifactRoot) {
   } catch (error) {
     // Fixed messages and selected state only. Container output can contain credentials.
     report.failure = error instanceof assert.AssertionError ? 'A smoke HTTP/runtime assertion failed' : redactDiagnostic(error.message);
+    if (error instanceof assert.AssertionError) report.assertion = assertionDiagnostic(error);
     if (error.diagnostic) report.commandFailure = error.diagnostic;
     try {
       report.diagnostics = inspect().map(row => {
