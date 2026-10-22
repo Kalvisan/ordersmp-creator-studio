@@ -373,6 +373,7 @@ describe('Google-only creator and publisher route boundaries', () => {
     ['MediaController', 'uploadSimple'],
     ['MediaController', 'deleteMedia'],
     ['MediaController', 'saveMediaInformation'],
+    ['MediaController', 'lookupNativeUpload'],
   ])('rejects creator route %s.%s', async (controller, handler) => {
     await expect(
       guard.canActivate(context(controller, handler, creator()))

@@ -262,6 +262,7 @@ export class PoliciesGuard implements CanActivate {
         ![
           'getMedia',
           'getMediaStatus',
+          'lookupNativeUpload',
           'uploadServer',
           'uploadSimple',
           'deleteMedia',

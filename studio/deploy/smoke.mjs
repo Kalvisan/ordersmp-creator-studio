@@ -13,17 +13,46 @@ const custom = ['postiz', 'gateway', 'worker', 'temporal'];
 const ports = new Map([[3000, 18001], [3002, 18001], [4007, 18001], [4200, 18001],
   [15432, 18002], [15433, 18005], [16379, 18003], [16080, 18006], [8444, 18008],
   ...[17233, 17234, 17235, 17236, 18233, 17333, 17334, 17335, 17339].map(port => [port, 18004])]);
-const secret = () => randomBytes(48).toString('hex');
+const generatedSecrets = new Set();
+const secret = () => {
+  const value = randomBytes(48).toString('hex');
+  generatedSecrets.add(value);
+  return value;
+};
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+export function redactDiagnostic(value, secrets = generatedSecrets) {
+  let text = String(value || '');
+  for (const secret of secrets) if (secret) text = text.replaceAll(secret, '[redacted]');
+  return text
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/]+@/gi, '$1[redacted]@')
+    .replace(/\bBearer\s+[^\s"']+/gi, 'Bearer [redacted]')
+    .replace(/((?:password|secret|token|api[_-]?key)["'\s:=]+)[^\s"',;]+/gi, '$1[redacted]')
+    .replace(/[A-Za-z0-9_-]{32,}/g, '[redacted-value]')
+    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '')
+    .split('\n').slice(0, 6).join('\n').slice(0, 800);
+}
 function command(executable, args, options = {}) {
   const result = spawnSync(executable, args, { encoding: 'utf8', timeout: 120000,
     maxBuffer: 8 * 1024 * 1024, ...options });
-  if (result.status !== 0 || result.error) throw new Error(`Command failed: ${executable} ${args[0] || ''}`);
+  if (result.status !== 0 || result.error) {
+    const program = executable === 'sudo' ? args[1] : executable;
+    const candidate = args[executable === 'sudo' ? 2 : executable === 'docker' ? 2 : 0];
+    const subcommand = /^[a-z][a-z-]*$/.test(candidate || '') ? candidate : undefined;
+    const error = new Error(`Command failed: ${program}${subcommand ? ` ${subcommand}` : ''}`);
+    error.diagnostic = { executable: program, subcommand, exitCode: result.status,
+      timedOut: result.error?.code === 'ETIMEDOUT', stderr: redactDiagnostic(result.stderr) };
+    throw error;
+  }
   return result.stdout;
 }
 function root(args, options) { return command('sudo', ['-n', ...args], options); }
 function docker(args, options) { return command('docker', ['--host', 'unix:///var/run/docker.sock', ...args], options); }
 function checked(condition, message) { if (!condition) throw new Error(message); }
+
+export function smokeEgressRules(table) {
+  checked(/^creatorci[0-9]+_egress$/.test(table), 'Invalid smoke firewall table');
+  return `table inet ${table} {\n  chain output {\n    type filter hook output priority -200; policy accept;\n    meta skuid { ${services.map((_, i) => 18001 + i).join(', ')} } oifname != "lo" reject\n  }\n}\n`;
+}
 
 export function terminateSmokeContainers(project, { composeDown, dockerCommand }) {
   if (!/^creatorci[0-9]+$/.test(project)) return false;
@@ -46,7 +75,7 @@ export async function smoke(artifactRoot) {
   const slice = `${id}.slice`, workerSlice = `${id}-worker.slice`;
   const table = `${id}_egress`;
   const definition = join(directory, 'compose.json');
-  const report = { services: [], checks: [], outcome: 'failed' };
+  const report = { services: [], checks: [], outcome: 'failed', stage: 'driver-preflight' };
   let networkAdded = false, firewallAdded = false, slicesAdded = false, deploymentAttempted = false;
   const dc = args => docker(['compose', '--project-name', id, '--project-directory', directory,
     '--file', definition, ...args], { timeout: 480000 });
@@ -57,6 +86,7 @@ export async function smoke(artifactRoot) {
   try {
     checked(docker(['info', '--format', '{{.CgroupDriver}} {{.CgroupVersion}}']).trim() === 'systemd 2',
       'Smoke requires the production systemd/cgroups-v2 driver');
+    report.stage = 'image-artifacts';
     const imageEnv = {};
     for (const target of custom) {
       const digest = (await readFile(join(resolve(artifactRoot), `digest-${target}`, 'image-digest.txt'), 'utf8')).trim();
@@ -76,6 +106,7 @@ export async function smoke(artifactRoot) {
         else throw new Error('Unexpected production bind source');
       }
     }
+    report.stage = 'private-config';
     const passwords = { postiz: secret(), temporal: secret(), redis: secret(), jwt: secret(), approval: secret(), worker: secret() };
     const common = { GOOGLE_AUTH_OWNER_EMAIL: 'smoke-owner@example.com' };
     const envs = Object.fromEntries(services.map(name => [name, {}]));
@@ -118,20 +149,28 @@ export async function smoke(artifactRoot) {
     }
     await writeFile(definition, JSON.stringify(doc), { mode: 0o600 });
     // Pull first. All application UIDs then lose non-loopback network access.
+    report.stage = 'image-pull';
     dc(['pull', '--quiet']);
+    report.stage = 'private-address';
     const aliases = JSON.parse(root(['ip', '-j', 'address', 'show', 'dev', 'lo']));
     checked(!aliases.some(row => row.addr_info.some(item => item.local === '10.64.64.1')), 'Private smoke address already exists');
     root(['ip', 'address', 'add', '10.64.64.1/32', 'dev', 'lo']); networkAdded = true;
-    const rules = `table inet ${table} { chain output { type filter hook output priority -200; policy accept; meta skuid { ${services.map((_, i) => 18001 + i).join(', ')} } oifname != "lo" reject; } }`;
+    const rules = smokeEgressRules(table);
+    report.stage = 'egress-policy-check';
+    root(['nft', '--check', '-f', '-'], { input: rules });
+    report.stage = 'egress-policy-install';
     root(['nft', '-f', '-'], { input: rules }); firewallAdded = true;
+    report.stage = 'systemd-slices';
     const allow = [...ports.keys()].map(port => `SocketBindAllow=tcp:${port}`).join('\n');
     const unit = `[Slice]\nCPUQuota=200%\nMemoryMax=10G\nMemorySwapMax=0\nTasksMax=2048\nSocketBindDeny=any\n${allow}\nSocketBindAllow=udp:17333-17335\nSocketBindAllow=udp:17339\n`;
     slicesAdded = true;
     root(['tee', `/run/systemd/system/${slice}`], { input: unit });
     root(['tee', `/run/systemd/system/${workerSlice}`], { input: '[Slice]\nCPUQuota=50%\nMemoryMax=2G\nMemorySwapMax=0\nTasksMax=128\n' });
     root(['systemctl', 'daemon-reload']); root(['systemctl', 'start', slice, workerSlice]);
+    report.stage = 'container-start';
     deploymentAttempted = true;
     dc(['up', '--detach', '--no-build', '--pull', 'never']);
+    report.stage = 'container-readiness';
     const deadline = Date.now() + 360000;
     let rows, applicationReady = false;
     while (Date.now() < deadline) {
@@ -151,6 +190,7 @@ export async function smoke(artifactRoot) {
     }
     checked(applicationReady && rows?.length === 8 && rows.every(row => row.State.Running &&
       (!doc.services[row.Config.Labels['com.docker.compose.service']]?.healthcheck || row.State.Health?.Status === 'healthy')), 'Startup health deadline exceeded');
+    report.stage = 'runtime-isolation';
     for (const row of rows) {
       const name = row.Config.Labels['com.docker.compose.service'], spec = doc.services[name];
       const memory = /^(\d+)([MG])$/.exec(spec?.mem_limit || '');
@@ -187,6 +227,7 @@ export async function smoke(artifactRoot) {
     for (const port of [3000, 3002, 4007, 4200, 15432, 15433, 16379, 16080, 8444, 17233, 17234, 17235, 17236, 18233])
       checked(observedTcp.has(port), `Required loopback listener is missing: ${port}`);
     report.checks.push('eight services started; configured health checks and runtime isolation passed', 'creator TCP/UDP listeners use the required private addresses and UIDs');
+    report.stage = 'worker-functional';
     const worker = rows.find(row => row.Config.Labels['com.docker.compose.service'] === 'worker');
     docker(['exec', '--user', '18007:18007', worker.Id, 'python', '-c',
       'import worker,subprocess; subprocess.run(["ffmpeg","-version"],check=True,stdout=subprocess.DEVNULL); assert worker.request("GET") is None']);
@@ -201,6 +242,7 @@ export async function smoke(artifactRoot) {
       const index = output.indexOf(boundary), headers = output.slice(0, index), body = output.slice(index + boundary.length);
       return { status: Number(/^HTTP\/\S+ (\d+)/.exec(headers)?.[1]), headers, body };
     };
+    report.stage = 'http-auth';
     const portal = request('/creator/');
     assert.equal(portal.status, 303); assert.match(portal.headers, /location: \/auth\/login/i);
     const login = request('/auth/login');
@@ -229,9 +271,11 @@ export async function smoke(artifactRoot) {
     checked(loginCookie && /HttpOnly/i.test(loginCookie) && /Secure/i.test(loginCookie) && /SameSite=Lax/i.test(loginCookie) && !/Domain=/i.test(loginCookie), 'Google state cookie protections missing');
     report.checks.push('private uploads, forged sessions, legacy login and invalid Google callback denied', 'portal redirects to Google-only sign-in; state cookie and PKCE present', 'application egress blocked throughout runtime; no live provider calls');
     report.outcome = 'passed';
+    report.stage = 'verified';
   } catch (error) {
     // Fixed messages and selected state only. Container output can contain credentials.
-    report.failure = error instanceof assert.AssertionError ? 'A smoke HTTP/runtime assertion failed' : error.message;
+    report.failure = error instanceof assert.AssertionError ? 'A smoke HTTP/runtime assertion failed' : redactDiagnostic(error.message);
+    if (error.diagnostic) report.commandFailure = error.diagnostic;
     try {
       report.diagnostics = inspect().map(row => {
         const logs = docker(['logs', '--tail', '200', row.Id]);

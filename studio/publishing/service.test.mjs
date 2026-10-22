@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PortalRepository } from '../portal/repository.mjs';
 import { createPublishingService } from './service.mjs';
+import { discordClipLimit } from './discord.webhook.mjs';
 import {
   canonicalJson,
   hashJson,
@@ -183,6 +184,265 @@ export async function fixture(t, extra = {}) {
     approvalSecretFile,
   };
 }
+
+async function webhookFixture(t, extra = {}) {
+  const state = {
+    guild: '123456789012345671',
+    channel: '123456789012345678',
+    webhook: '123456789012345670',
+    gets: 0,
+    posts: [],
+    reply: null,
+    beforeMetadata: null,
+  };
+  const url = `https://discord.com/api/webhooks/${state.webhook}/${'w'.repeat(
+    64
+  )}`;
+  const f = await fixture(t, {
+    publisherOrgId: undefined,
+    apiKeyFile: undefined,
+    approvalSecretFile: undefined,
+    discordWebhookUrl: url,
+    allowedDiscordGuilds: [state.guild],
+    fetchImpl: async (requested, init) => {
+      assert.equal(new URL(requested).origin, 'https://discord.com');
+      assert.equal(init.redirect, 'error');
+      assert.equal(init.credentials, 'omit');
+      if (init.method === 'GET') {
+        state.gets++;
+        await state.beforeMetadata?.();
+        return Response.json({
+          id: state.webhook,
+          type: 1,
+          guild_id: state.guild,
+          channel_id: state.channel,
+          token: 'do-not-expose',
+          url,
+          name: 'raw-name',
+          user: { email: 'private' },
+        });
+      }
+      state.posts.push({ requested: String(requested), ...init });
+      if (state.reply) return state.reply();
+      return Response.json({
+        id: '123456789012345679',
+        webhook_id: state.webhook,
+        channel_id: state.channel,
+      });
+    },
+    ...extra,
+  });
+  const approval = (overrides = {}) =>
+    f.approval({
+      destinations: [
+        {
+          platform: 'discord',
+          accountId: `discord-webhook:${state.webhook}`,
+          settings: { channel: '123456789012345678' },
+        },
+      ],
+      ...overrides,
+    });
+  return { ...f, webhook: state, approval };
+}
+
+test('webhook-only setup publishes the reviewed exact clip and caption with mentions disabled and confirmed message ID', async (t) => {
+  const f = await webhookFixture(t);
+  const accounts = await f.service.listIntegrations();
+  assert.equal(accounts.length, 1);
+  assert.equal(accounts[0].name, 'OrderSMP Notices');
+  assert.equal(accounts[0].ready, true);
+  assert.equal(JSON.stringify(accounts).includes('do-not-expose'), false);
+  assert.equal(JSON.stringify(f.service).includes('w'.repeat(64)), false);
+  await assert.rejects(
+    f.service.approveAndSchedule(f.actor, f.draft.id, f.approval()),
+    (error) => error.status === 403
+  );
+  await f.service.approveAndSchedule(f.owner, f.draft.id, f.approval());
+  assert.equal(f.webhook.posts.length, 0);
+  await f.service.tick();
+  assert.equal(f.webhook.posts.length, 1);
+  const sent = f.webhook.posts[0],
+    payload = JSON.parse(sent.body.get('payload_json'));
+  assert.equal(new URL(sent.requested).search, '?wait=true');
+  assert.equal(payload.content, 'We found the base.\n\nVideo: Creator');
+  assert.equal(payload.username, 'OrderSMP Notices');
+  assert.deepEqual(payload.allowed_mentions, { parse: [] });
+  assert.equal(payload.avatar_url, undefined);
+  assert.deepEqual(
+    Buffer.from(await sent.body.get('files[0]').arrayBuffer()),
+    Buffer.from('registered worker output')
+  );
+  const delivery = f.repository.list('deliveries')[0];
+  assert.equal(delivery.status, 'published');
+  assert.equal(delivery.messageId, '123456789012345679');
+  assert.equal(
+    delivery.releaseUrl,
+    `https://discord.com/channels/${f.webhook.guild}/${f.webhook.channel}/${delivery.messageId}`
+  );
+  await f.service.tick();
+  assert.equal(f.webhook.posts.length, 1);
+});
+
+test('webhook approval blocks unlisted channels, notification mentions and clips above the fixed 10 MiB bound', async (t) => {
+  const f = await webhookFixture(t);
+  const bad = f.approval();
+  bad.destinations[0].settings.channel = '999999999999999999';
+  await assert.rejects(
+    f.service.approveAndSchedule(f.owner, f.draft.id, bad),
+    /approved Discord/
+  );
+  const changed = f.service.updateDraft(f.actor, {
+    draftId: f.draft.id,
+    version: f.draft.version,
+    title: 'Clip',
+    description: '@everyone new video',
+  });
+  await assert.rejects(
+    f.service.approveAndSchedule(
+      f.owner,
+      f.draft.id,
+      f.approval({ version: changed.version })
+    ),
+    /mentions/
+  );
+  const current = f.service.updateDraft(f.actor, {
+    draftId: f.draft.id,
+    version: changed.version,
+    title: 'Clip',
+    description: 'A new video',
+  });
+  const bytes = Buffer.alloc(discordClipLimit + 1, 1),
+    media = {
+      ...f.media,
+      size: bytes.length,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+    };
+  await writeFile(join(f.root, media.path), bytes);
+  f.repository.put(
+    'drafts',
+    current.id,
+    { ...current, media: [media] },
+    current.version
+  );
+  await assert.rejects(
+    f.service.approveAndSchedule(
+      f.owner,
+      current.id,
+      f.approval({ version: current.version + 1 })
+    ),
+    /10 MiB/
+  );
+  assert.equal(f.webhook.posts.length, 0);
+});
+
+for (const change of ['caption', 'permission', 'channel', 'scope', 'media'])
+  test(`webhook dispatch fails closed after reviewed ${change} changes`, async (t) => {
+    const f = await webhookFixture(t);
+    await f.service.approveAndSchedule(f.owner, f.draft.id, f.approval());
+    if (change === 'caption') {
+      const draft = f.repository.read('drafts', f.draft.id);
+      f.repository.put(
+        'drafts',
+        draft.id,
+        { ...draft, description: 'Changed' },
+        draft.version
+      );
+    }
+    if (change === 'permission') {
+      const permission = f.repository.read('permissions', f.permissionId);
+      f.repository.put(
+        'permissions',
+        permission.id,
+        { ...permission, revokedAt: new Date(f.clock.value).toISOString() },
+        permission.version
+      );
+    }
+    if (change === 'channel') f.webhook.channel = '999999999999999999';
+    if (change === 'scope') {
+      const delivery = f.repository.list('deliveries')[0];
+      f.repository.put(
+        'deliveries',
+        delivery.id,
+        {
+          ...delivery,
+          target: { ...delivery.target, guildId: '999999999999999999' },
+        },
+        delivery.version
+      );
+    }
+    if (change === 'media') {
+      const filename = join(f.root, 'approved', `${f.media.sha256}.mp4`);
+      await chmod(filename, 0o600);
+      await writeFile(filename, 'tampered');
+    }
+    await f.service.tick();
+    assert.equal(f.repository.list('deliveries')[0].status, 'blocked');
+    assert.equal(f.webhook.posts.length, 0);
+  });
+
+test('revocation while preparing webhook bytes is rechecked before the outbound write', async (t) => {
+  const f = await webhookFixture(t);
+  await f.service.approveAndSchedule(f.owner, f.draft.id, f.approval());
+  f.webhook.beforeMetadata = () => {
+    // validation performs one fresh lookup, then preparation checks again.
+    if (f.webhook.gets < 3) return;
+    const permission = f.repository.read('permissions', f.permissionId);
+    f.repository.put(
+      'permissions',
+      permission.id,
+      { ...permission, revokedAt: new Date(f.clock.value).toISOString() },
+      permission.version
+    );
+  };
+  await f.service.tick();
+  assert.equal(f.repository.list('deliveries')[0].status, 'blocked');
+  assert.equal(f.webhook.posts.length, 0);
+});
+
+for (const failure of [
+  'timeout',
+  'server-error',
+  'malformed-confirmation',
+  'wrong-channel',
+])
+  test(`webhook ${failure} is uncertain and never automatically reposted`, async (t) => {
+    const f = await webhookFixture(t);
+    f.webhook.reply = () => {
+      if (failure === 'timeout')
+        throw new Error('secret webhook network failure');
+      if (failure === 'server-error') return new Response('', { status: 503 });
+      if (failure === 'wrong-channel')
+        return Response.json({
+          id: '123456789012345679',
+          webhook_id: f.webhook.webhook,
+          channel_id: '999999999999999999',
+        });
+      return Response.json({});
+    };
+    await f.service.approveAndSchedule(f.owner, f.draft.id, f.approval());
+    await f.service.tick();
+    await f.service.tick();
+    assert.equal(f.repository.list('deliveries')[0].status, 'uncertain');
+    assert.equal(f.webhook.posts.length, 1);
+    assert.equal(
+      JSON.stringify(f.repository.list('deliveries')).includes(
+        'secret webhook'
+      ),
+      false
+    );
+  });
+
+test('webhook rate limit requires owner review without an automatic retry', async (t) => {
+  const f = await webhookFixture(t);
+  f.webhook.reply = () =>
+    new Response('', { status: 429, headers: { 'Retry-After': '1' } });
+  await f.service.approveAndSchedule(f.owner, f.draft.id, f.approval());
+  await f.service.tick();
+  await f.service.tick();
+  assert.equal(f.repository.list('deliveries')[0].status, 'failed_review');
+  assert.equal(f.webhook.posts.length, 1);
+});
 
 test('signer uses canonical UTF-8 JSON and the exact native guard protocol', async (t) => {
   const f = await fixture(t);
@@ -479,7 +739,7 @@ test('explicit YouTube audience/visibility and exact account-platform match are 
     );
 });
 
-test('Discord blocks unlisted channels and notification mentions', async (t) => {
+test('native Discord bot integrations require the dedicated webhook route', async (t) => {
   const f = await fixture(t);
   const destination = (channel) => ({
     platform: 'discord',
@@ -492,7 +752,7 @@ test('Discord blocks unlisted channels and notification mentions', async (t) => 
       f.draft.id,
       f.approval({ destinations: [destination('123456789012345679')] })
     ),
-    /approved Discord/
+    /dedicated channel webhook/
   );
   const changed = f.service.updateDraft(f.actor, {
     draftId: f.draft.id,
@@ -509,7 +769,7 @@ test('Discord blocks unlisted channels and notification mentions', async (t) => 
         destinations: [destination('123456789012345678')],
       })
     ),
-    /mentions/
+    /dedicated channel webhook/
   );
 });
 

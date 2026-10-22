@@ -1,6 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { terminateSmokeContainers } from './smoke.mjs';
+import { spawnSync } from 'node:child_process';
+import { terminateSmokeContainers, smokeEgressRules, redactDiagnostic } from './smoke.mjs';
+
+test('setup diagnostics redact credentials and bound child stderr', () => {
+  const token = 'fixture-sensitive-value-0123456789abcdef';
+  const raw = `password=short-secret Bearer hidden-bearer postgresql://user:dbpass@127.0.0.1/db ${token}\n` + 'detail\n'.repeat(1000);
+  const result = redactDiagnostic(raw, [token]);
+  for (const privateValue of ['short-secret', 'hidden-bearer', 'user:dbpass', token]) assert.ok(!result.includes(privateValue));
+  assert.ok(result.includes('[redacted]'));
+  assert.ok(result.length <= 800);
+  assert.ok(result.split('\n').length <= 6);
+});
+
+test('generated smoke firewall parses in an isolated Linux network namespace', { skip: process.platform !== 'linux' }, () => {
+  const result = spawnSync('sudo', ['-n', 'unshare', '--net', 'nft', '--check', '--file', '-'], {
+    input: smokeEgressRules('creatorci123_egress'), encoding: 'utf8', timeout: 10000,
+  });
+  assert.equal(result.status, 0, redactDiagnostic(result.stderr));
+});
 
 test('failed compose teardown recovers only the fixed smoke project and verifies termination', () => {
   const calls = [];

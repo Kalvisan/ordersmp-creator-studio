@@ -1,8 +1,9 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import { createReadStream, createWriteStream } from 'node:fs';
+import { constants, createReadStream, createWriteStream } from 'node:fs';
 import {
   lstat,
   mkdir,
+  open,
   readFile,
   readdir,
   realpath,
@@ -17,8 +18,30 @@ import { pipeline } from 'node:stream/promises';
 
 export const platforms = ['youtube', 'tiktok', 'instagram', 'discord'];
 const uuid = /^[a-f0-9-]{36}$/;
+const nativeUploadPath =
+  /^20\d{2}\/(?:0[1-9]|1[0-2])\/(?:0[1-9]|[12]\d|3[01])\/[a-f0-9]{32,64}\.(?:jpg|jpeg|png|gif|webp|avif|bmp|tif|tiff|mp4|mp3|m4a|wav|ogg|opus)$/;
+const nativeMime = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  avif: 'image/avif',
+  bmp: 'image/bmp',
+  tif: 'image/tiff',
+  tiff: 'image/tiff',
+  mp4: 'video/mp4',
+  mp3: 'audio/mpeg',
+  m4a: 'audio/mp4',
+  wav: 'audio/wav',
+  ogg: 'audio/ogg',
+  opus: 'audio/ogg',
+};
 export function creatorHandle(value) {
-  if (typeof value !== 'string' || !/^@[A-Za-z0-9_.-]{1,40}$/.test(value.trim()))
+  if (
+    typeof value !== 'string' ||
+    !/^@[A-Za-z0-9_.-]{1,40}$/.test(value.trim())
+  )
     fail('Add an on-screen credit such as @yourname');
   return value.trim();
 }
@@ -30,12 +53,14 @@ export class PortalService {
     repository,
     storageRoot,
     ownerEmail,
+    postizUploadRoot,
     maxUploadBytes = 20 * 1024 ** 3,
     storageLimitBytes = 100 * 1024 ** 3,
   }) {
     this.repository = repository;
     this.storageRoot = resolve(storageRoot);
     this.ownerEmail = ownerEmail?.trim().toLowerCase();
+    this.postizUploadRoot = postizUploadRoot ? resolve(postizUploadRoot) : null;
     this.maxUploadBytes = maxUploadBytes;
     this.storageLimitBytes = storageLimitBytes;
     this.uploads = new Set();
@@ -47,6 +72,74 @@ export class PortalService {
     if (!source || (!actor.owner && source.creatorId !== actor.id))
       fail('Recording not found', 404);
     return source;
+  }
+  assertNativeUploadOwner(actor) {
+    if (
+      !actor?.owner ||
+      actor.email?.trim().toLowerCase() !== this.ownerEmail ||
+      !['ADMIN', 'SUPERADMIN'].includes(actor.role)
+    )
+      fail('Only the channel owner can read native uploads', 403);
+  }
+  async nativeUpload(actor, relativePath, lookup) {
+    this.assertNativeUploadOwner(actor);
+    if (
+      typeof relativePath !== 'string' ||
+      relativePath.trim() !== relativePath ||
+      !nativeUploadPath.test(relativePath)
+    )
+      fail('Media not found', 404);
+    if (!this.postizUploadRoot || typeof lookup !== 'function')
+      fail('Native media is not configured', 503);
+    if ((await lookup(relativePath)) !== true) fail('Media not found', 404);
+    let handle;
+    try {
+      const root = await realpath(this.postizUploadRoot);
+      if ((await lstat(this.postizUploadRoot)).isSymbolicLink())
+        fail('Media not found', 404);
+      const parts = relativePath.split('/');
+      for (let length = 1; length <= parts.length; length++)
+        if (
+          (
+            await lstat(join(this.postizUploadRoot, ...parts.slice(0, length)))
+          ).isSymbolicLink()
+        )
+          fail('Media not found', 404);
+      const filename = join(this.postizUploadRoot, ...parts);
+      handle = await open(
+        filename,
+        constants.O_RDONLY | (constants.O_NOFOLLOW || 0)
+      );
+      const actual = await realpath(filename),
+        info = await handle.stat(),
+        current = await lstat(filename);
+      // Keep the verified descriptor: never reopen this attacker-writable path.
+      // Linux also resolves the opened object itself, including swapped ancestors.
+      const openedPath =
+        process.platform === 'linux'
+          ? await realpath(`/proc/self/fd/${handle.fd}`)
+          : actual;
+      if (
+        actual !== join(root, ...parts) ||
+        openedPath !== actual ||
+        current.isSymbolicLink() ||
+        info.dev !== current.dev ||
+        info.ino !== current.ino ||
+        !info.isFile() ||
+        info.nlink !== 1 ||
+        info.size <= 0 ||
+        info.size > 2 * 1024 ** 3
+      )
+        fail('Media not found', 404);
+      return {
+        handle,
+        size: info.size,
+        mime: nativeMime[parts.at(-1).split('.').at(-1)],
+      };
+    } catch {
+      await handle?.close().catch(() => {});
+      fail('Media not found', 404);
+    }
   }
   sources(actor) {
     return this.repository
@@ -273,8 +366,16 @@ export class PortalService {
     const source = this.own(actor, sourceId);
     const handle = creatorHandle(input.creatorHandle);
     const permission = this.repository.read('permissions', source.permissionId);
-    if (!permission || permission.revokedAt || !permission.editing || permission.creatorHandle !== handle)
-      fail('Save permission with this on-screen credit before preparing clips', 403);
+    if (
+      !permission ||
+      permission.revokedAt ||
+      !permission.editing ||
+      permission.creatorHandle !== handle
+    )
+      fail(
+        'Save permission with this on-screen credit before preparing clips',
+        403
+      );
     if (
       !Array.isArray(input.markers) ||
       input.markers.length > 10 ||
@@ -427,8 +528,8 @@ export class PortalService {
         !/^[a-f0-9]{64}$/.test(clip.sha256 || '') ||
         typeof clip.transcript !== 'string' ||
         clip.transcript.length > 20000 ||
-        !/^[a-f0-9-]{36}\.mp4$/.test(clip.path || '')
-        || clip.creatorHandle !== handle
+        !/^[a-f0-9-]{36}\.mp4$/.test(clip.path || '') ||
+        clip.creatorHandle !== handle
       )
         fail('Invalid prepared clip');
       const full = await this.safePath(`renders/${clip.path}`, 'renders');

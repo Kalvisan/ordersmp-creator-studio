@@ -36,14 +36,24 @@ The gateway can start unbound for first login. After the owner signs in,
 `smp prod creator owner-bootstrap` binds its real organisation and API key
 through a private root-controlled transport. It creates no account or session.
 
+Discord publishing uses a dedicated incoming webhook for the approved channel,
+with the name `OrderSMP Notices` and its uploaded OrderSMP eye avatar. No second
+server bot or Minecraft bot token is needed. Keep its URL in the gateway's
+protected configuration and set the finite guild/channel allowlists. Each send
+rechecks the reviewed destination and exact video bytes, disables mentions,
+and records Discord's confirmed message ID. An unclear result needs owner
+reconciliation. Attachments are limited to 10 MiB; prepare a smaller clip or
+use an explicit manual handoff above that limit. Reading source-channel news
+is a separate event integration, not a capability of an incoming webhook.
+
 ## Recording workflow
 
 Upload an MP4, WebM or MKV, up to 20 GiB and twelve hours. Storage admission
 is capped at 100 GiB, including partial uploads and reserved renders. Supply
 3–60 second ranges, or let the worker suggest up to three loud moments.
 Suggestions require review; volume is not a judgement of story quality.
-An already prepared 1080×1920 H.264/AAC Short keeps its original frame rate
-without a second video encode. New landscape clips keep the full game view
+An already prepared 1080×1920 Short keeps its frame rate, up to 60 fps, while
+the worker adds the required creator credit. New landscape clips keep the full game view
 inside a portrait canvas. No face crop or platform watermark is added.
 
 The base worker includes FFmpeg. Local transcription is disabled unless a

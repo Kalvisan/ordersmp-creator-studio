@@ -14,7 +14,12 @@ import { join, resolve, sep } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { hashJson, mediaHash, readSecret, signApproval } from './protocol.mjs';
-import { capabilities, platformFor, reviewedSettings } from './platforms.mjs';
+import {
+  nativeCapabilities,
+  platformFor,
+  reviewedSettings,
+} from './platforms.mjs';
+import { DiscordWebhookPublisher } from './discord.webhook.mjs';
 
 const fail = (message, status = 400) => {
   throw Object.assign(new Error(message), { status });
@@ -64,7 +69,8 @@ async function digestFile(filename, expected) {
 
 export class PublishingService {
   constructor(options) {
-    Object.assign(this, options);
+    const { discordWebhookUrl, ...publicOptions } = options;
+    Object.assign(this, publicOptions);
     this.fetchImpl = options.fetchImpl || fetch;
     this.now = options.now || Date.now;
     this.storageRoot = resolve(options.storageRoot);
@@ -78,6 +84,16 @@ export class PublishingService {
           .split(',')
           .map((value) => value.trim())
           .filter(Boolean);
+    this.directPublishers = discordWebhookUrl
+      ? [
+          new DiscordWebhookPublisher({
+            url: discordWebhookUrl,
+            guilds: options.allowedDiscordGuilds,
+            channels: this.allowedDiscordChannels,
+            fetchImpl: this.fetchImpl,
+          }),
+        ]
+      : [];
     this.busy = false;
     this.freezes = 0;
     this.reservedBytes = 0;
@@ -120,6 +136,12 @@ export class PublishingService {
       fail('Only the channel owner can approve publication', 403);
   }
   setupReady() {
+    return !!(
+      this.publicMediaBaseUrl &&
+      (this.nativeReady() || this.directPublishers.length)
+    );
+  }
+  nativeReady() {
     return !!(
       this.publisherOrgId?.trim() &&
       this.apiKeyFile &&
@@ -164,7 +186,7 @@ export class PublishingService {
       );
   }
   async api(path, init = {}, preparedKey) {
-    if (!this.setupReady())
+    if (!this.nativeReady())
       fail(
         'The owner must finish connecting the official publishing workspace',
         503
@@ -196,30 +218,51 @@ export class PublishingService {
     return response;
   }
   async listIntegrations() {
-    const identity = await this.api('/me');
-    if (
-      !identity.ok ||
-      (await identity.json())?.organization?.id !== this.publisherOrgId
-    )
-      fail('The official channel connection needs owner attention', 503);
-    const response = await this.api('/integrations');
-    if (!response.ok) fail('The channel connections are unavailable', 503);
-    const accounts = await response.json();
-    if (!Array.isArray(accounts) || accounts.length > 100)
-      fail('The channel connection response is invalid', 503);
-    return accounts.map((account) => {
-      const platform = platformFor(account.identifier);
-      return {
-        id: String(account.id),
-        name: String(account.name || '').slice(0, 150),
-        platform,
-        disabled: !!account.disabled,
-        ...capabilities(platform, this),
-        ...(account.disabled
-          ? { ready: false, reason: 'Reconnect this account before publishing' }
-          : {}),
-      };
-    });
+    const direct = await Promise.all(
+      this.directPublishers.map((publisher) => publisher.integration())
+    );
+    if (!this.nativeReady()) {
+      if (direct.length) return direct;
+      fail(
+        'The owner must finish connecting the official publishing workspace',
+        503
+      );
+    }
+    try {
+      const identity = await this.api('/me');
+      if (
+        !identity.ok ||
+        (await identity.json())?.organization?.id !== this.publisherOrgId
+      )
+        fail('The official channel connection needs owner attention', 503);
+      const response = await this.api('/integrations');
+      if (!response.ok) fail('The channel connections are unavailable', 503);
+      const accounts = await response.json();
+      if (!Array.isArray(accounts) || accounts.length > 100)
+        fail('The channel connection response is invalid', 503);
+      return [
+        ...accounts.map((account) => {
+          const platform = platformFor(account.identifier);
+          return {
+            id: String(account.id),
+            name: String(account.name || '').slice(0, 150),
+            platform,
+            disabled: !!account.disabled,
+            ...nativeCapabilities(account.identifier, this),
+            ...(account.disabled
+              ? {
+                  ready: false,
+                  reason: 'Reconnect this account before publishing',
+                }
+              : {}),
+          };
+        }),
+        ...direct,
+      ];
+    } catch (error) {
+      if (direct.length) return direct;
+      throw error;
+    }
   }
   createDraft(actor, input) {
     const source = this.repository.read('sources', input.sourceId);
@@ -508,12 +551,22 @@ export class PublishingService {
           },
         ],
       };
+      const directPublisher = this.directPublishers.find(
+        (publisher) => publisher.id === account.id
+      );
+      if (directPublisher)
+        directPublisher.validateReview({
+          body,
+          media: frozen,
+          target: account.target,
+        });
       return {
         platform: destination.platform,
         accountId: account.id,
         body,
         bodyHash: hashJson(body),
         mediaHash: mediaHash(body),
+        ...(directPublisher ? { target: account.target } : {}),
       };
     });
     const approvalId = randomUUID();
@@ -558,6 +611,7 @@ export class PublishingService {
           body: destination.body,
           bodyHash: destination.bodyHash,
           mediaHash: destination.mediaHash,
+          ...(destination.target ? { target: destination.target } : {}),
           createdAt: new Date(this.now()).toISOString(),
         };
       }
@@ -651,6 +705,7 @@ export class PublishingService {
       delivery.bodyHash !== reviewed.bodyHash ||
       mediaHash(delivery.body) !== reviewed.mediaHash ||
       delivery.mediaHash !== reviewed.mediaHash ||
+      hashJson(delivery.target || null) !== hashJson(reviewed.target || null) ||
       delivery.body.type !== 'now'
     )
       fail('Publication settings changed after review', 409);
@@ -671,7 +726,8 @@ export class PublishingService {
         (account) =>
           account.id === delivery.accountId &&
           account.platform === delivery.platform &&
-          account.ready
+          account.ready &&
+          hashJson(account.target || null) === hashJson(reviewed.target || null)
       )
     )
       fail('The destination needs owner attention', 409);
@@ -867,15 +923,40 @@ export class PublishingService {
           'scheduled'
         )
           continue;
-        const header = await signApproval({
-          body: candidate.body,
-          orgId: this.publisherOrgId,
-          permissionId: permission.id,
-          reviewerEmail: this.ownerEmail,
-          secretFile: this.approvalSecretFile,
-          now: this.now(),
-        });
-        const apiKey = await readSecret(this.apiKeyFile);
+        const directPublisher = this.directPublishers.find(
+          (publisher) => publisher.id === candidate.accountId
+        );
+        let prepared, header, apiKey;
+        if (directPublisher) {
+          try {
+            const approval = this.repository.read(
+              'approvals',
+              candidate.approvalId
+            );
+            prepared = await directPublisher.prepare({
+              body: candidate.body,
+              media: approval.snapshot.media,
+              target: candidate.target,
+              approvedMediaRoot: this.approvedMediaRoot,
+            });
+          } catch {
+            this.saveDelivery(candidate.id, {
+              status: 'blocked',
+              note: 'The destination or reviewed clip changed. Review it again.',
+            });
+            continue;
+          }
+        } else {
+          header = await signApproval({
+            body: candidate.body,
+            orgId: this.publisherOrgId,
+            permissionId: permission.id,
+            reviewerEmail: this.ownerEmail,
+            secretFile: this.approvalSecretFile,
+            now: this.now(),
+          });
+          apiKey = await readSecret(this.apiKeyFile);
+        }
         // Persist before the first network write. Restart recovery is uncertain,
         // so neither a timeout nor a process crash can cause automatic reposts.
         const claimed = this.repository.transaction((state) => {
@@ -884,6 +965,11 @@ export class PublishingService {
           if (current?.status !== 'scheduled') return false;
           if (
             !approval ||
+            approval.reviewerEmail !== this.ownerEmail ||
+            hashJson(approval.snapshot) !== approval.snapshotHash ||
+            hashJson(current.body) !== hashJson(candidate.body) ||
+            hashJson(current.target || null) !==
+              hashJson(candidate.target || null) ||
             hashJson(state.permissions[permission.id]) !==
               hashJson(approval.snapshot.permission) ||
             hashJson(contentSnapshot(state.drafts[candidate.draftId])) !==
@@ -902,6 +988,13 @@ export class PublishingService {
         });
         if (!claimed) continue;
         try {
+          if (directPublisher) {
+            this.saveDelivery(
+              candidate.id,
+              await directPublisher.publish(prepared)
+            );
+            continue;
+          }
           const response = await this.api(
             '/posts',
             {

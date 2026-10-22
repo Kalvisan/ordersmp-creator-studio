@@ -6,7 +6,27 @@ import { SaveMediaInformationDto } from '@gitroom/nestjs-libraries/dtos/media/sa
 export class MediaRepository {
   constructor(private _media: PrismaRepository<'media'>) {}
 
-  saveFile(org: string, fileName: string, filePath: string, originalName?: string) {
+  findRegisteredNativeUpload(org: string, name: string, path: string) {
+    // Media.name already has an index. The exact URL and current organisation
+    // are also required; no other media metadata is exposed by this lookup.
+    return this._media.model.media.findFirst({
+      where: {
+        organizationId: org,
+        name,
+        path,
+        deletedAt: null,
+        status: { not: 'processing' },
+      },
+      select: { id: true },
+    });
+  }
+
+  saveFile(
+    org: string,
+    fileName: string,
+    filePath: string,
+    originalName?: string
+  ) {
     return this._media.model.media.create({
       data: {
         organization: {

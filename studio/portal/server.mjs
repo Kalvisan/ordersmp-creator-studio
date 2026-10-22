@@ -42,14 +42,28 @@ export function json(response, status, data) {
   response.end(JSON.stringify(data));
 }
 function streamMedia(request, response, file) {
-  if (response.destroyed) return;
+  const close = () => file.handle?.close().catch(() => {});
+  if (response.destroyed) {
+    close();
+    return;
+  }
   const match = /^bytes=(\d+)-(\d*)$/.exec(String(request.headers.range || ''));
-  if (request.headers.range && !match) fail('Invalid video range', 416);
+  if (request.headers.range && !match) {
+    close();
+    fail('Invalid video range', 416);
+  }
   const start = match ? Number(match[1]) : 0;
   const end = match && match[2] ? Number(match[2]) : file.size - 1;
-  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) ||
-      start < 0 || start > end || end >= file.size)
+  if (
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(end) ||
+    start < 0 ||
+    start > end ||
+    end >= file.size
+  ) {
+    close();
     fail('Invalid video range', 416);
+  }
   response.writeHead(match ? 206 : 200, {
     'Content-Type': file.mime,
     'Accept-Ranges': 'bytes',
@@ -57,8 +71,13 @@ function streamMedia(request, response, file) {
     ...(match ? { 'Content-Range': `bytes ${start}-${end}/${file.size}` } : {}),
     'Content-Disposition': 'inline',
   });
-  if (request.method === 'HEAD') return response.end();
-  const stream = createReadStream(file.path, { start, end });
+  if (request.method === 'HEAD') {
+    close();
+    return response.end();
+  }
+  const stream = file.handle
+    ? file.handle.createReadStream({ start, end, autoClose: true })
+    : createReadStream(file.path, { start, end });
   stream.on('error', () => response.destroy());
   response.on('close', () => stream.destroy());
   return stream.pipe(response);
@@ -81,6 +100,7 @@ export class PortalController {
     this.publishing = publishing;
     this.fetchImpl = fetchImpl;
     this.publicStreams = 0;
+    this.nativeStreams = 0;
     const backend = new URL(backendUrl);
     if (backend.protocol !== 'http:' || backend.hostname !== '127.0.0.1')
       throw new Error('The portal backend must use private loopback HTTP');
@@ -98,9 +118,15 @@ export class PortalController {
       if (url.pathname === '/creator/health' && request.method === 'GET')
         return json(response, 200, { ok: true });
       if (url.pathname.startsWith('/creator-media/')) {
-        const route = /^\/creator-media\/([a-f0-9]{64}\.mp4)$/.exec(url.pathname);
-        if (!route || !['GET', 'HEAD'].includes(request.method) ||
-            !this.publishing?.resolvePublicMedia) fail('Page not found', 404);
+        const route = /^\/creator-media\/([a-f0-9]{64}\.mp4)$/.exec(
+          url.pathname
+        );
+        if (
+          !route ||
+          !['GET', 'HEAD'].includes(request.method) ||
+          !this.publishing?.resolvePublicMedia
+        )
+          fail('Page not found', 404);
         if (this.publicStreams >= 8) {
           response.setHeader('Retry-After', '5');
           fail('Media is busy. Try again shortly.', 429);
@@ -109,16 +135,25 @@ export class PortalController {
         let released = false;
         let resolving = true;
         const release = () => {
-          if (!released && !resolving) { released = true; this.publicStreams--; }
+          if (!released && !resolving) {
+            released = true;
+            this.publicStreams--;
+          }
         };
         response.once('finish', release);
         response.once('close', release);
         try {
           const file = await this.publishing.resolvePublicMedia(route[1]);
           resolving = false;
-          if (response.destroyed) { release(); return; }
+          if (response.destroyed) {
+            await file.handle?.close();
+            release();
+            return;
+          }
           return streamMedia(request, response, {
-            path: file.filename, size: file.size, mime: 'video/mp4',
+            path: file.filename,
+            size: file.size,
+            mime: 'video/mp4',
           });
         } catch (error) {
           resolving = false;
@@ -179,6 +214,60 @@ export class PortalController {
         request.headers.origin !== this.origin
       )
         fail('Open Creator Studio in its own tab and try again', 403);
+      if (url.pathname.startsWith('/uploads/')) {
+        this.service.assertNativeUploadOwner(actor);
+        if (!['GET', 'HEAD'].includes(request.method))
+          fail('Method not allowed', 405);
+        if (this.nativeStreams >= 8) {
+          response.setHeader('Retry-After', '5');
+          fail('Media is busy. Try again shortly.', 429);
+        }
+        this.nativeStreams++;
+        let resolving = true,
+          released = false;
+        const release = () => {
+          if (!resolving && !released) {
+            released = true;
+            this.nativeStreams--;
+          }
+        };
+        response.once('finish', release);
+        response.once('close', release);
+        try {
+          const file = await this.service.nativeUpload(
+            actor,
+            url.pathname.slice('/uploads/'.length),
+            async (relative) => {
+              const lookup = new URL('/media/native-upload', this.backendUrl);
+              lookup.searchParams.set('relative', relative);
+              const result = await (this.fetchImpl || fetch)(lookup, {
+                headers: { cookie: request.headers.cookie },
+                redirect: 'error',
+                signal: AbortSignal.timeout(8000),
+              });
+              if (result.status === 401 || result.status === 403)
+                fail(
+                  'Only the channel owner can read native uploads',
+                  result.status
+                );
+              if (!result.ok)
+                fail('Native media is temporarily unavailable', 503);
+              return (await result.json())?.registered === true;
+            }
+          );
+          resolving = false;
+          if (response.destroyed) {
+            await file.handle?.close();
+            release();
+            return;
+          }
+          return streamMedia(request, response, file);
+        } catch (error) {
+          resolving = false;
+          release();
+          throw error;
+        }
+      }
       if (
         request.method === 'GET' &&
         ['/creator', '/creator/'].includes(url.pathname)
@@ -314,6 +403,8 @@ if (
     approvalSecretFile: process.env.CREATOR_PUBLISH_APPROVAL_SECRET_FILE,
     mcpTokenFile: process.env.CREATOR_MCP_TOKEN_FILE,
     allowedDiscordChannels: process.env.CREATOR_DISCORD_CHANNEL_IDS,
+    allowedDiscordGuilds: process.env.CREATOR_DISCORD_GUILD_IDS,
+    discordWebhookUrl: process.env.CREATOR_DISCORD_WEBHOOK_URL,
   });
   const { createMcpHandler } = await import('../publishing/mcp.mjs');
   if (
@@ -332,6 +423,7 @@ if (
     repository,
     storageRoot,
     publishing,
+    postizUploadRoot: process.env.CREATOR_POSTIZ_UPLOAD_ROOT,
     backendUrl: 'http://127.0.0.1:3000',
     frontendUrl: process.env.FRONTEND_URL,
     ownerEmail: process.env.GOOGLE_AUTH_OWNER_EMAIL,

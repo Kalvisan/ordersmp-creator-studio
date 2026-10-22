@@ -107,6 +107,15 @@ export function capabilities(platform, options) {
     reason: adapter.reason || null,
   };
 }
+export function nativeCapabilities(identifier, options) {
+  if (identifier === 'discord')
+    return {
+      ready: false,
+      manualRequired: true,
+      reason: 'Use the dedicated channel webhook for Discord announcements',
+    };
+  return capabilities(platformFor(identifier), options);
+}
 export function reviewedSettings(platform, settings, content, options) {
   const capability = capabilities(platform, options);
   if (!capability.ready) fail(capability.reason);
