@@ -35,6 +35,17 @@ test('setup diagnostics redact credentials and bound child stderr', () => {
   assert.ok(result.split('\n').length <= 6);
 });
 
+test('Temporal resource detection has a user name and home while retaining its isolated kernel UID', () => {
+  const environment = Object.fromEntries(['postiz', 'gateway', 'worker', 'temporal'].map(name =>
+    [`CREATOR_IMAGE_${name.toUpperCase()}`, `ghcr.io/kalvisan/ordersmp-creator-studio-${name}@sha256:${'a'.repeat(64)}`]));
+  const service = compose(environment).services.temporal;
+  assert.equal(service.user, '18004:18004');
+  assert.equal(service.environment.USER, 'creator-temporal');
+  assert.equal(service.environment.HOME, '/tmp');
+  assert.equal(service.read_only, true);
+  assert.deepEqual(service.cap_drop, ['ALL']);
+});
+
 test('failure diagnostics retain the final error after progress output and redact its credentials', () => {
   const token = 'fixture-sensitive-value-0123456789abcdef';
   const result = diagnosticTail('Container creating\n'.repeat(100) +

@@ -65,6 +65,8 @@ export function compose(environment = process.env) {
       'case "$REDIS_PASSWORD" in *[!0-9a-f]*|"") exit 1;; esac; [ "${#REDIS_PASSWORD}" -ge 64 ]; umask 077; printf "bind 127.0.0.1\\nport 16379\\nprotected-mode yes\\nrequirepass %s\\ndir /data\\nappendonly yes\\nmaxmemory 192mb\\nmaxmemory-policy noeviction\\n" "$REDIS_PASSWORD" > /tmp/redis.conf; unset REDIS_PASSWORD; exec redis-server /tmp/redis.conf'.replaceAll('$', () => '$$') ],
     healthcheck: health(['CMD-SHELL', 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli -h 127.0.0.1 -p 16379 ping | grep -qx PONG']) };
   services.temporal = { ...base('temporal', 18004, '768M', 0.15, 128, custom.temporal),
+    // Go's pure-Go user lookup needs these for an isolated UID absent from passwd.
+    environment: { USER: 'creator-temporal', HOME: '/tmp' },
     depends_on: healthy(['temporalpg']),
     healthcheck: health(['CMD-SHELL', 'test -f /tmp/creator-temporal-ready && temporal --address 127.0.0.1:17233 operator cluster health >/dev/null 2>&1']) };
   services.temporalpg = pg('temporalpg', 18005, 15433, 'temporal', 'postgres');
