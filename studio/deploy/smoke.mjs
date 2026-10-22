@@ -284,7 +284,8 @@ export async function smoke(artifactRoot) {
     assert.equal(request('/api/auth/oauth/GITHUB').status, 403);
     const reset = request('/api/auth/forgot', ['--header', 'Content-Type: application/json',
       '--data', JSON.stringify({ email: 'smoke-owner@example.com' })]);
-    assert.equal(reset.status, 200); assert.equal(JSON.parse(reset.body).forgot, false);
+    // Nest's unchanged POST controller uses its default 201 response status.
+    assert.equal(reset.status, 201); assert.equal(JSON.parse(reset.body).forgot, false);
     for (const route of ['login', 'register']) {
       const legacy = request(`/api/auth/${route}`, ['--header', 'Content-Type: application/json', '--data',
         JSON.stringify({ provider: 'LOCAL', email: 'smoke-owner@example.com', password: 'smoke-invalid', company: 'Smoke' })]);
