@@ -23,16 +23,24 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 export function redactDiagnostic(value, secrets = generatedSecrets) {
   let text = String(value || '');
   for (const secret of secrets) if (secret) text = text.replaceAll(secret, '[redacted]');
-  return text
+  text = text
     .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/]+@/gi, '$1[redacted]@')
     .replace(/\bBearer\s+[^\s"']+/gi, 'Bearer [redacted]')
     .replace(/((?:password|secret|token|api[_-]?key)["'\s:=]+)[^\s"',;]+/gi, '$1[redacted]')
     .replace(/[A-Za-z0-9_-]{32,}/g, '[redacted-value]')
     .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '')
-    .split('\n').slice(0, 6).join('\n').slice(0, 800);
+    .split('\n').slice(0, 6).join('\n');
+  return text.length <= 800 ? text : `${text.slice(0, 200)} ... ${text.slice(-595)}`;
 }
 export function diagnosticTail(value, secrets = generatedSecrets) {
-  return redactDiagnostic(String(value || '').trimEnd().split('\n').slice(-6).join('\n'), secrets);
+  const lines = String(value || '').trimEnd().split('\n').slice(-6).map(line => {
+    try {
+      const item = JSON.parse(line);
+      if (typeof item.error === 'string') return `${item.level || 'error'}: ${String(item.msg || '')}: ${item.error}`;
+    } catch { /* Keep ordinary process diagnostics. */ }
+    return line;
+  });
+  return redactDiagnostic(lines.join('\n'), secrets);
 }
 function command(executable, args, options = {}) {
   const { combineOutput = false, ...spawnOptions } = options;

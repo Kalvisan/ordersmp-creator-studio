@@ -45,6 +45,18 @@ test('failure diagnostics retain the final error after progress output and redac
   assert.ok(result.split('\n').length <= 6);
 });
 
+test('long structured Go error chains retain their final cause without stacks or credentials', () => {
+  const raw = JSON.stringify({ level: 'error', msg: 'invoke failed',
+    error: 'dependency chain: '.repeat(500) + 'dial tcp 127.0.0.1:15433: connection refused password=short-secret',
+    stacktrace: 'irrelevant stack frame\n'.repeat(500) });
+  const result = diagnosticTail(raw);
+  assert.ok(result.includes('invoke failed'));
+  assert.ok(result.includes('connection refused'));
+  assert.ok(!result.includes('short-secret'));
+  assert.ok(!result.includes('irrelevant stack'));
+  assert.ok(result.length <= 800);
+});
+
 test('generated smoke firewall parses in an isolated Linux network namespace', { skip: process.platform !== 'linux' }, () => {
   const result = spawnSync('sudo', ['-n', 'unshare', '--net', 'nft', '--check', '--file', '-'], {
     input: smokeEgressRules('creatorci123_egress'), encoding: 'utf8', timeout: 10000,
