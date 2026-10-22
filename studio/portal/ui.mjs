@@ -70,6 +70,10 @@ function showRecording(source) {
     summary = el('summary', 'Permission and creator credit');
   details.append(summary);
   const permissionForm = el('form', null),
+    onScreenCredit = field('On-screen credit', 'input', {
+      required: '', maxlength: '41', pattern: '@[A-Za-z0-9_.-]{1,40}',
+      placeholder: '@yourname',
+    }),
     credit = field('Credit shown with every post', 'input', {
       required: '',
       maxlength: '500',
@@ -92,6 +96,7 @@ function showRecording(source) {
     monetization = check('OrderSMP may monetize these posts.');
   const savedPermission = permissions.get(source.id);
   if (savedPermission) {
+    onScreenCredit.input.value = savedPermission.creatorHandle || '';
     credit.input.value = savedPermission.credit;
     for (const item of selected)
       item.input.checked = savedPermission.platforms.includes(item.platform);
@@ -108,6 +113,7 @@ function showRecording(source) {
     );
   }
   permissionForm.append(
+    onScreenCredit.wrapper,
     credit.wrapper,
     ...selected.map((item) => item.wrapper),
     confirm.wrapper,
@@ -121,6 +127,7 @@ function showRecording(source) {
     save.disabled = true;
     try {
       await api(`sources/${source.id}/permission`, {
+        creatorHandle: onScreenCredit.input.value.trim(),
         credit: credit.input.value,
         platforms: selected
           .filter((item) => item.input.checked)
@@ -185,6 +192,7 @@ function showRecording(source) {
             })
         : [];
       await api(`sources/${source.id}/prepare`, {
+        creatorHandle: onScreenCredit.input.value.trim(),
         markers: ranges,
         language: language.input.value,
       });
@@ -234,6 +242,8 @@ function showDraft(draft) {
   title.input.disabled = description.input.disabled = draft.status !== 'draft';
   article.append(title.wrapper, description.wrapper);
   const permission = permissions.get(draft.sourceId);
+  const credited = permission?.creatorHandle && draft.media?.length &&
+    draft.media.every((media) => media.creatorHandle === permission.creatorHandle);
   article.append(
     el(
       'p',
@@ -242,6 +252,9 @@ function showDraft(draft) {
         : 'The creator must save permission before this clip can be scheduled.'
     )
   );
+  article.append(el('p', credited
+    ? `On-screen credit: ${permission.creatorHandle}`
+    : 'Prepare this recording again with the current on-screen credit before scheduling.'));
   if (draft.status === 'draft')
     article.append(
       button('Save draft', async () => {
@@ -255,7 +268,7 @@ function showDraft(draft) {
         await refresh();
       })
     );
-  if (session.owner && draft.status === 'draft' && clip) {
+  if (session.owner && draft.status === 'draft' && clip && credited) {
     const review = el('details', null);
     review.append(el('summary', 'Review and schedule'));
     const form = el('form', null),

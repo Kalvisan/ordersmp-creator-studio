@@ -147,6 +147,7 @@ test('a creator explicitly records platform permission and can revoke it, anothe
     editing: true,
     platforms: ['youtube', 'discord'],
     credit: 'Creator channel',
+    creatorHandle: '@Creator',
     monetization: false,
   });
   assert.deepEqual(permission.platforms, ['youtube', 'discord']);
@@ -160,12 +161,16 @@ test('a creator explicitly records platform permission and can revoke it, anothe
 test('worker claims once with a lease; completion requires active lease, confined paths and real media hashes', async (t) => {
   const { service, repository, directory } = await setup(t);
   const source = await service.upload(actor, uploadRequest(), 'source.mp4');
+  service.permission(actor, source.id, { confirmed: true, editing: true,
+    platforms: ['youtube'], credit: 'Creator channel', creatorHandle: '@b1oeorblue' });
   const queued = await service.prepare(actor, source.id, {
     markers: [{ start: 0, end: 20 }],
     language: 'en',
+    creatorHandle: '@b1oeorblue',
   });
   const claimed = service.claimJob();
   assert.equal(claimed.id, queued.id);
+  assert.equal(claimed.creatorHandle, '@b1oeorblue');
   assert.ok(claimed.leaseToken);
   assert.equal(service.claimJob(), null);
   const path = `${randomUUID()}.mp4`;
@@ -177,6 +182,7 @@ test('worker claims once with a lease; completion requires active lease, confine
     duration: 20,
     transcript: 'A real clip transcript.',
     sha256: createHash('sha256').update(mp4).digest('hex'),
+    creatorHandle: '@b1oeorblue',
   };
   await assert.rejects(
     service.completeJob({ id: claimed.id, leaseToken: 'wrong', clips: [clip] }),
@@ -194,6 +200,14 @@ test('worker claims once with a lease; completion requires active lease, confine
     service.completeJob({
       id: claimed.id,
       leaseToken: claimed.leaseToken,
+      clips: [{ ...clip, creatorHandle: '@Wrong' }],
+    }),
+    /Invalid prepared clip/
+  );
+  await assert.rejects(
+    service.completeJob({
+      id: claimed.id,
+      leaseToken: claimed.leaseToken,
       clips: [{ ...clip, sha256: '0'.repeat(64) }],
     }),
     /checksum/
@@ -205,6 +219,8 @@ test('worker claims once with a lease; completion requires active lease, confine
   });
   assert.equal(repository.list('drafts').length, 1);
   assert.equal(repository.list('drafts')[0].creatorId, actor.id);
+  assert.equal(repository.list('drafts')[0].media[0].creatorHandle, claimed.creatorHandle);
+  assert.equal(repository.read('sources', source.id).clips[0].creatorHandle, claimed.creatorHandle);
   await assert.rejects(
     service.completeJob({
       id: claimed.id,
@@ -221,6 +237,21 @@ test('media confinement rejects dot segments even when they resolve inside the m
     service.safePath('renders/../inbox/source', 'renders'),
     /Invalid media path/
   );
+});
+
+test('on-screen credit rejects filter syntax and preparation must match saved permission', async (t) => {
+  const { service } = await setup(t);
+  const source = await service.upload(actor, uploadRequest(), 'source.mp4');
+  const permission = { confirmed: true, editing: true, platforms: ['youtube'], credit: 'Video by creator' };
+  for (const creatorHandle of [undefined, '', '@', '@bad:drawtext', '@bad\nextra', '@' + 'a'.repeat(41), 'creator']) {
+    assert.throws(() => service.permission(actor, source.id, { ...permission, creatorHandle }), /on-screen credit/);
+    await assert.rejects(service.prepare(actor, source.id, { markers: [], creatorHandle }), /on-screen credit/);
+  }
+  await assert.rejects(service.prepare(actor, source.id, { markers: [], creatorHandle: '@Creator' }), /Save permission/);
+  const saved = service.permission(actor, source.id, { ...permission, creatorHandle: ' @Creator.One-2_3 ' });
+  assert.equal(saved.creatorHandle, '@Creator.One-2_3');
+  await assert.rejects(service.prepare(actor, source.id, { markers: [], creatorHandle: '@Other' }), /Save permission/);
+  assert.equal((await service.prepare(actor, source.id, { markers: [], creatorHandle: saved.creatorHandle })).creatorHandle, saved.creatorHandle);
 });
 test('browser identity comes only from the fixed backend Google session, never supplied identity headers', async () => {
   let target, options;

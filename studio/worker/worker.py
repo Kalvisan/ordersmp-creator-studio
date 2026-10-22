@@ -6,6 +6,9 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import shutil
+import tempfile
+from fractions import Fraction
 import time
 import urllib.error
 import urllib.request
@@ -16,6 +19,13 @@ INBOX = Path(os.environ.get('CREATOR_INBOX', '/media/inbox'))
 RENDERS = Path(os.environ.get('CREATOR_RENDERS', '/media/renders'))
 ID = re.compile(r'^[a-zA-Z0-9-]{1,80}(?:\.(?:mp4|mkv|webm))?$')
 MAX_DURATION = 12 * 3600
+CREDIT_FONT = Path(os.environ.get('CREATOR_CREDIT_FONT', '/app/assets/order-pixel.ttf'))
+
+
+def creator_handle(value):
+    if not isinstance(value, str) or not re.fullmatch(r'@[A-Za-z0-9_.-]{1,40}', value):
+        raise ValueError('A valid on-screen creator credit is required')
+    return value
 
 
 def owned_file(root, relative):
@@ -58,17 +68,15 @@ def markers_for(duration, markers):
     return answer
 
 
-def ready_portrait(path):
+def source_frame_rate(path):
     result = subprocess.run(['ffprobe', '-v', 'error', '-protocol_whitelist', 'file,pipe',
         '-show_streams', '-of', 'json', str(path)], capture_output=True, timeout=60, check=True)
     streams = json.loads(result.stdout)['streams']
     video = next(s for s in streams if s.get('codec_type') == 'video')
-    audio = [s for s in streams if s.get('codec_type') == 'audio']
-    rate = video.get('avg_frame_rate', '0/1').split('/')
-    fps = float(rate[0]) / max(float(rate[1]), 1)
-    return (video.get('width') == 1080 and video.get('height') == 1920
-        and video.get('codec_name') == 'h264' and video.get('pix_fmt') == 'yuv420p'
-        and 1 <= fps <= 60 and all(s.get('codec_name') == 'aac' for s in audio))
+    rate = Fraction(video.get('avg_frame_rate', '0/1'))
+    if not 1 <= rate <= 240:
+        raise ValueError('Use a video with a supported frame rate')
+    return str(min(rate, Fraction(60)))
 
 
 def candidates(path, duration, audio):
@@ -116,43 +124,49 @@ def transcript(path, language):
 
 
 def process(job):
+    handle = creator_handle(job.get('creatorHandle'))
     source = owned_file(INBOX, job['sourcePath'])
     duration, audio = probe(source)
     ranges = markers_for(duration, job.get('markers', [])) or candidates(source, duration, audio)
-    preserve = len(ranges) == 1 and ranges[0] == (0, duration) and duration <= 60 and ready_portrait(source)
+    fps = source_frame_rate(source)
+    if CREDIT_FONT.is_symlink() or not CREDIT_FONT.is_file():
+        raise ValueError('The licensed creator credit font is unavailable')
     results = []
     RENDERS.mkdir(parents=True, exist_ok=True)
-    for start, end in ranges:
-        name = f'{uuid.uuid4()}.mp4'
-        final = RENDERS / name
-        temporary = RENDERS / f'.{name}.part.mp4'
-        # Preserve the whole game view. Reviewers can reject or choose another range.
-        video_filter = ('scale=1080:1920:force_original_aspect_ratio=decrease,'
-            'pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=0x1a1a1a,setsar=1,fps=30')
-        command = ['ffmpeg', '-nostdin', '-hide_banner', '-v', 'error', '-threads', '1',
-            '-filter_threads', '1', '-protocol_whitelist', 'file,pipe', '-ss', str(start),
-            '-i', str(source), '-t', str(end - start), '-map', '0:v:0', '-map', '0:a:0?',
-            '-vf', video_filter, '-c:v', 'libx264', '-threads', '1', '-preset', 'veryfast',
-            '-crf', '22', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '160k', '-ar', '48000',
-            '-map_metadata', '-1', '-movflags', '+faststart', '-y', str(temporary)]
-        if preserve:
-            command = ['ffmpeg', '-nostdin', '-hide_banner', '-v', 'error',
-                '-protocol_whitelist', 'file,pipe', '-i', str(source), '-map', '0:v:0',
-                '-map', '0:a:0?', '-c', 'copy', '-map_metadata', '-1', '-movflags', '+faststart',
-                '-y', str(temporary)]
-        try:
-            subprocess.run(command, check=True, stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL, timeout=1800)
-            rendered_duration, _ = probe(temporary)
-            text = transcript(temporary, job.get('language'))
-            with temporary.open('rb') as stream:
-                digest = hashlib.file_digest(stream, 'sha256').hexdigest()
-            temporary.chmod(0o640)
-            temporary.replace(final)
-            results.append(dict(path=name, sha256=digest, start=start, end=end,
-                duration=rendered_duration, transcript=text))
-        finally:
-            temporary.unlink(missing_ok=True)
+    with tempfile.TemporaryDirectory(prefix='creator-credit-') as credit_directory:
+        credit_root = Path(credit_directory)
+        # Filter syntax contains only fixed filenames. The handle stays literal text.
+        (credit_root / 'creator-credit.txt').write_text(handle, encoding='utf-8')
+        shutil.copyfile(CREDIT_FONT, credit_root / 'credit-font.ttf')
+        for start, end in ranges:
+            name = f'{uuid.uuid4()}.mp4'
+            final = RENDERS / name
+            temporary = RENDERS / f'.{name}.part.mp4'
+            # Preserve the whole game view. Reviewers can reject or choose another range.
+            video_filter = ('scale=1080:1920:force_original_aspect_ratio=decrease,'
+                'pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=0x1a1a1a,setsar=1,fps=' + fps + ','
+                'drawtext=fontfile=credit-font.ttf:textfile=creator-credit.txt:expansion=none:'
+                'fontsize=22:fontcolor=0xfff2cf:x=54:y=h-260-text_h:'
+                'shadowx=2:shadowy=2:shadowcolor=black@0.9:box=1:boxcolor=black@0.35:boxborderw=8')
+            command = ['ffmpeg', '-nostdin', '-hide_banner', '-v', 'error', '-threads', '1',
+                '-filter_threads', '1', '-protocol_whitelist', 'file,pipe', '-ss', str(start),
+                '-i', str(source), '-t', str(end - start), '-map', '0:v:0', '-map', '0:a:0?',
+                '-vf', video_filter, '-c:v', 'libx264', '-threads', '1', '-preset', 'veryfast',
+                '-crf', '22', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '160k', '-ar', '48000',
+                '-map_metadata', '-1', '-movflags', '+faststart', '-y', str(temporary)]
+            try:
+                subprocess.run(command, check=True, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL, timeout=1800, cwd=credit_root)
+                rendered_duration, _ = probe(temporary)
+                text = transcript(temporary, job.get('language'))
+                with temporary.open('rb') as stream:
+                    digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+                temporary.chmod(0o640)
+                temporary.replace(final)
+                results.append(dict(path=name, sha256=digest, start=start, end=end,
+                    duration=rendered_duration, transcript=text, creatorHandle=handle))
+            finally:
+                temporary.unlink(missing_ok=True)
     return results
 
 

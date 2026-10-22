@@ -3,6 +3,7 @@ FROM node:22-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae
 # Reuse the release's tested dependency tree, then rebuild all changed source.
 FROM ghcr.io/gitroomhq/postiz-app:v2.25.1@sha256:d2b37802e96757729fdea2d3d71287f841c2b619faa1cb4c21dac07df657fde1 AS upstream
 FROM upstream AS postiz
+LABEL org.opencontainers.image.source="https://github.com/Kalvisan/ordersmp-creator-studio" org.opencontainers.image.licenses="AGPL-3.0"
 USER root
 COPY --from=current-node /usr/local/bin/node /usr/local/bin/node
 RUN apt-get update && apt-get -y upgrade && rm -rf /var/lib/apt/lists/*
@@ -23,6 +24,7 @@ ENV HOME=/tmp NODE_ENV=production NODE_OPTIONS=--max-old-space-size=2048
 ENTRYPOINT ["node", "/app/studio/deploy/postiz-entrypoint.mjs"]
 
 FROM current-node AS gateway
+LABEL org.opencontainers.image.source="https://github.com/Kalvisan/ordersmp-creator-studio" org.opencontainers.image.licenses="AGPL-3.0"
 WORKDIR /app
 COPY --from=upstream /app/node_modules /app/node_modules
 COPY studio /app/studio
@@ -31,17 +33,21 @@ ENV NODE_ENV=production HOME=/tmp
 ENTRYPOINT ["node", "/app/studio/deploy/gateway-entrypoint.mjs"]
 
 FROM python:3.12-slim-bookworm@sha256:6a0e06f5ba0b373d051aabd3fffb9b873f27f9a2a3a14bcbe37dee6f0e3bbc70 AS worker
+LABEL org.opencontainers.image.source="https://github.com/Kalvisan/ordersmp-creator-studio" org.opencontainers.image.licenses="AGPL-3.0"
 RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY studio/worker /app
+COPY studio/assets/order-pixel.ttf studio/assets/SIL-OFL.txt /app/assets/
 COPY studio/deploy/worker-entrypoint.py /app/entrypoint.py
 USER 18007:18007
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HOME=/tmp OMP_NUM_THREADS=1
+ENV CREATOR_CREDIT_FONT=/app/assets/order-pixel.ttf
 ENTRYPOINT ["python", "/app/entrypoint.py"]
 
 FROM temporalio/admin-tools:1.32.1@sha256:9ef0dc5b063bf4ffd5c1512de72e0e73e225bd2c7006a18ce69bd592a8862a83 AS temporal-tools
 FROM temporalio/server:1.32.1@sha256:acecbab5b0b8ae9cf4012b508866ca97feda3709577bf157b537239f40029049 AS temporal
+LABEL org.opencontainers.image.source="https://github.com/Kalvisan/ordersmp-creator-studio" org.opencontainers.image.licenses="AGPL-3.0"
 COPY --from=temporal-tools /usr/local/bin/temporal-sql-tool /usr/local/bin/temporal /usr/local/bin/
 COPY --from=temporal-tools /etc/temporal/schema /etc/temporal/schema
 COPY studio/deploy/temporal.yaml /etc/temporal/studio.yaml

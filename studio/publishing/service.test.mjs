@@ -33,6 +33,7 @@ export async function fixture(t, extra = {}) {
     sha256: createHash('sha256').update(bytes).digest('hex'),
     size: bytes.length,
     mime: 'video/mp4',
+    creatorHandle: '@Creator',
   };
   await writeFile(join(root, media.path), bytes);
   const apiKeyFile = join(root, 'api-key'),
@@ -86,6 +87,7 @@ export async function fixture(t, extra = {}) {
       editing: true,
       monetization: false,
       credit: 'Video: Creator',
+      creatorHandle: '@Creator',
       confirmedBy: actor.email,
       revokedAt: null,
     },
@@ -630,6 +632,124 @@ test('review refuses to exceed the recording library storage limit', async (t) =
     /library is full/
   );
   assert.equal(f.repository.list('approvals').length, 0);
+});
+
+test('approval preserves and binds the exact rendered creator handle', async (t) => {
+  const f = await fixture(t);
+  assert.equal(f.draft.media[0].creatorHandle, '@Creator');
+  await f.service.approveAndSchedule(f.owner, f.draft.id, f.approval());
+  const approval = f.repository.list('approvals')[0];
+  assert.equal(approval.snapshot.permission.creatorHandle, '@Creator');
+  assert.equal(approval.snapshot.draft.media[0].creatorHandle, '@Creator');
+  assert.equal(approval.snapshot.media[0].creatorHandle, '@Creator');
+});
+
+for (const handle of [
+  undefined,
+  '@OtherCreator',
+  '@creator',
+  ' @Creator',
+  '@bad:filter',
+  '@bad%{expr}',
+  '@' + 'x'.repeat(41),
+])
+  test(`approval rejects an uncredited or mismatched render: ${String(
+    handle
+  )}`, async (t) => {
+    const f = await fixture(t);
+    const draft = f.repository.read('drafts', f.draft.id);
+    if (handle === undefined) delete draft.media[0].creatorHandle;
+    else draft.media[0].creatorHandle = handle;
+    const changed = f.repository.put('drafts', draft.id, draft, draft.version);
+    await assert.rejects(
+      f.service.approveAndSchedule(
+        f.owner,
+        draft.id,
+        f.approval({ version: changed.version })
+      ),
+      (error) => error.status === 409 && /burned into/.test(error.message)
+    );
+    assert.equal(f.repository.list('approvals').length, 0);
+    assert.equal(f.calls.filter((call) => call.method === 'POST').length, 0);
+  });
+
+test('legacy clips without burned-credit metadata remain draft-only after a handle is set', async (t) => {
+  const f = await fixture(t);
+  const source = f.repository.read('sources', f.sourceId);
+  delete source.clips[0].creatorHandle;
+  f.repository.put('sources', source.id, source, source.version);
+  const draft = f.service.createDraft(f.actor, {
+    sourceId: source.id,
+    clipId: f.clipId,
+  });
+  assert.equal(Object.hasOwn(draft.media[0], 'creatorHandle'), false);
+  await assert.rejects(
+    f.service.approveAndSchedule(f.owner, draft.id, f.approval()),
+    /burned into/
+  );
+});
+
+test('malformed permission handle is rejected even when render metadata copies it', async (t) => {
+  const f = await fixture(t);
+  const permission = f.repository.read('permissions', f.permissionId);
+  f.repository.put(
+    'permissions',
+    permission.id,
+    { ...permission, creatorHandle: '@Creator:drawtext' },
+    permission.version
+  );
+  const draft = f.repository.read('drafts', f.draft.id);
+  draft.media[0].creatorHandle = '@Creator:drawtext';
+  const changed = f.repository.put('drafts', draft.id, draft, draft.version);
+  await assert.rejects(
+    f.service.approveAndSchedule(
+      f.owner,
+      draft.id,
+      f.approval({ version: changed.version })
+    ),
+    /burned into/
+  );
+});
+
+test('a trailing newline cannot make a stored creator handle appear canonical', async (t) => {
+  const f = await fixture(t);
+  const permission = f.repository.read('permissions', f.permissionId);
+  f.repository.put(
+    'permissions',
+    permission.id,
+    { ...permission, creatorHandle: '@Creator\n' },
+    permission.version
+  );
+  const draft = f.repository.read('drafts', f.draft.id);
+  draft.media[0].creatorHandle = '@Creator\n';
+  const changed = f.repository.put('drafts', draft.id, draft, draft.version);
+  await assert.rejects(
+    f.service.approveAndSchedule(
+      f.owner,
+      draft.id,
+      f.approval({ version: changed.version })
+    ),
+    /burned into/
+  );
+});
+
+test('changing the permission handle after approval blocks dispatch and public fetch', async (t) => {
+  const f = await fixture(t);
+  await f.service.approveAndSchedule(f.owner, f.draft.id, f.approval());
+  const permission = f.repository.read('permissions', f.permissionId);
+  f.repository.put(
+    'permissions',
+    permission.id,
+    { ...permission, creatorHandle: '@UpdatedCreator' },
+    permission.version
+  );
+  await f.service.tick();
+  assert.equal(f.repository.list('deliveries')[0].status, 'blocked');
+  assert.equal(f.calls.filter((call) => call.method === 'POST').length, 0);
+  await assert.rejects(
+    f.service.resolvePublicMedia(`${f.media.sha256}.mp4`),
+    (error) => error.status === 404
+  );
 });
 
 test('public media is available during reviewed dispatch and returns only file and size', async (t) => {

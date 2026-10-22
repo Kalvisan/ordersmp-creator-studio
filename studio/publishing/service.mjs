@@ -20,6 +20,7 @@ const fail = (message, status = 400) => {
   throw Object.assign(new Error(message), { status });
 };
 const hashPattern = /^[a-f0-9]{64}$/;
+const creatorHandlePattern = /^@[A-Za-z0-9_.-]{1,40}$/;
 const fileStamp = (info) =>
   [info.dev, info.ino, info.size, info.mtimeMs, info.ctimeMs, info.mode].join(
     ':'
@@ -249,6 +250,9 @@ export class PublishingService {
             sha256: clip.sha256,
             size: clip.size,
             mime: clip.mime,
+            ...(typeof clip.creatorHandle === 'string'
+              ? { creatorHandle: clip.creatorHandle }
+              : {}),
           },
         ],
         permissionId: source.permissionId,
@@ -290,6 +294,20 @@ export class PublishingService {
       )
     )
       fail('The creator must confirm permission for these destinations', 409);
+    if (
+      typeof permission.creatorHandle !== 'string' ||
+      permission.creatorHandle !== permission.creatorHandle.trim() ||
+      !creatorHandlePattern.test(permission.creatorHandle) ||
+      !Array.isArray(draft.media) ||
+      !draft.media.length ||
+      draft.media.some(
+        (media) => media?.creatorHandle !== permission.creatorHandle
+      )
+    )
+      fail(
+        "Prepare this clip again with the creator's current @handle burned into the video",
+        409
+      );
     return permission;
   }
   async sourceMedia(media) {
@@ -637,6 +655,8 @@ export class PublishingService {
     )
       fail('Publication settings changed after review', 409);
     for (const media of approval.snapshot.media) {
+      if (media.creatorHandle !== permission.creatorHandle)
+        fail('The rendered creator credit changed after review', 409);
       if (media.path !== `${this.publicMediaBaseUrl}${media.sha256}.mp4`)
         fail('Approved media URL changed', 409);
       const info = await digestFile(
@@ -710,7 +730,10 @@ export class PublishingService {
       const media = approval.snapshot.media.find(
         (item) => item.sha256 === sha256
       );
-      if (media?.path === `${this.publicMediaBaseUrl}${sha256}.mp4`)
+      if (
+        media?.path === `${this.publicMediaBaseUrl}${sha256}.mp4` &&
+        media.creatorHandle === permission.creatorHandle
+      )
         return media;
     }
     return null;

@@ -17,6 +17,11 @@ import { pipeline } from 'node:stream/promises';
 
 export const platforms = ['youtube', 'tiktok', 'instagram', 'discord'];
 const uuid = /^[a-f0-9-]{36}$/;
+export function creatorHandle(value) {
+  if (typeof value !== 'string' || !/^@[A-Za-z0-9_.-]{1,40}$/.test(value.trim()))
+    fail('Add an on-screen credit such as @yourname');
+  return value.trim();
+}
 export const fail = (message, status = 400) => {
   throw Object.assign(new Error(message), { status });
 };
@@ -218,6 +223,7 @@ export class PortalService {
       input.credit.length > 500
     )
       fail('Add the creator credit');
+    const handle = creatorHandle(input.creatorHandle);
     const id = source.permissionId || randomUUID();
     const previous = this.repository.read('permissions', id);
     const permission = this.repository.put(
@@ -231,6 +237,7 @@ export class PortalService {
         editing: true,
         monetization: input.monetization === true,
         credit: input.credit.trim(),
+        creatorHandle: handle,
         confirmedBy: actor.email,
         confirmedAt: new Date().toISOString(),
         revokedAt: null,
@@ -264,6 +271,10 @@ export class PortalService {
   }
   async prepare(actor, sourceId, input) {
     const source = this.own(actor, sourceId);
+    const handle = creatorHandle(input.creatorHandle);
+    const permission = this.repository.read('permissions', source.permissionId);
+    if (!permission || permission.revokedAt || !permission.editing || permission.creatorHandle !== handle)
+      fail('Save permission with this on-screen credit before preparing clips', 403);
     if (
       !Array.isArray(input.markers) ||
       input.markers.length > 10 ||
@@ -317,6 +328,7 @@ export class PortalService {
       sourcePath: source.path.split('/').pop(),
       markers: input.markers.map(({ start, end }) => ({ start, end })),
       language: input.language || 'auto',
+      creatorHandle: handle,
       status: 'queued',
       createdAt: new Date().toISOString(),
       clips: [],
@@ -393,6 +405,7 @@ export class PortalService {
         },
         job.version
       );
+    const handle = creatorHandle(job.creatorHandle);
     if (
       !Array.isArray(input.clips) ||
       !input.clips.length ||
@@ -415,6 +428,7 @@ export class PortalService {
         typeof clip.transcript !== 'string' ||
         clip.transcript.length > 20000 ||
         !/^[a-f0-9-]{36}\.mp4$/.test(clip.path || '')
+        || clip.creatorHandle !== handle
       )
         fail('Invalid prepared clip');
       const full = await this.safePath(`renders/${clip.path}`, 'renders');
@@ -435,6 +449,7 @@ export class PortalService {
         transcript: clip.transcript,
         size: info.size,
         mime: 'video/mp4',
+        creatorHandle: handle,
       });
     }
     return this.repository.transaction((state) => {
@@ -473,6 +488,7 @@ export class PortalService {
               sha256: clip.sha256,
               size: clip.size,
               mime: clip.mime,
+              creatorHandle: clip.creatorHandle,
             },
           ],
           permissionId: source.permissionId,

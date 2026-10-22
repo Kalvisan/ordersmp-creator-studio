@@ -33,6 +33,7 @@ test('the actual portal UI renders recorded permission safely and saves through 
       '/creator/api/sources': [recording],
       '/creator/api/sources/source-id/permission': {
         credit: 'Video by the creator.',
+        creatorHandle: '@b1oeorblue',
         platforms: ['youtube'],
         editing: true,
         monetization: false,
@@ -72,6 +73,7 @@ test('the actual portal UI renders recorded permission safely and saves through 
       })),
       '/creator/api/publishing/update': { ok: true },
       '/creator/api/publishing/cancel': { ok: true },
+      '/creator/api/sources/source-id/prepare': { id: 'job-id' },
     };
     assert.ok(Object.hasOwn(routes, url), `Unexpected UI endpoint: ${url}`);
     return Response.json(routes[url]);
@@ -81,6 +83,20 @@ test('the actual portal UI renders recorded permission safely and saves through 
   assert.equal(window.document.querySelectorAll('[onerror]').length, 0);
   assert.equal(window.document.querySelectorAll('video').length, 1);
   assert.equal(window.document.getElementById('notice').textContent, '');
+  const creditLabels = [...window.document.querySelectorAll('label')].filter(label => label.textContent === 'On-screen credit');
+  assert.equal(creditLabels.length, 1);
+  const handleInput = creditLabels[0].querySelector('input');
+  assert.equal(handleInput.value, '@b1oeorblue');
+  assert.equal(handleInput.getAttribute('pattern'), '@[A-Za-z0-9_.-]{1,40}');
+  handleInput.closest('form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(JSON.parse(calls.find(call => call.url.endsWith('/permission') && call.options.body).options.body).creatorHandle, '@b1oeorblue');
+  const prepare = [...window.document.querySelectorAll('button')].find(button => button.textContent === 'Prepare clips');
+  prepare.closest('form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(JSON.parse(calls.find(call => call.url.endsWith('/prepare')).options.body).creatorHandle, '@b1oeorblue');
+  assert.ok(window.document.body.textContent.includes('Prepare this recording again with the current on-screen credit'));
+  assert.equal([...window.document.querySelectorAll('button')].some(button => button.textContent === 'Approve schedule'), false);
   const returns = [...window.document.querySelectorAll('button')].filter(
     (button) => button.textContent === 'Return to draft'
   );
