@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { terminateSmokeContainers, smokeEgressRules, redactDiagnostic, diagnosticTail } from './smoke.mjs';
+import { terminateSmokeContainers, smokeEgressRules, redactDiagnostic, diagnosticTail, structuredErrors } from './smoke.mjs';
 import { compose } from './compose.mjs';
 
 test('fresh PostgreSQL bootstrap clients and temporary servers share each isolated port and writable default socket', () => {
@@ -55,6 +55,21 @@ test('long structured Go error chains retain their final cause without stacks or
   assert.ok(!result.includes('short-secret'));
   assert.ok(!result.includes('irrelevant stack'));
   assert.ok(result.length <= 4096);
+});
+
+test('structured errors examine the bounded log and keep at most three redacted four-KiB causes', () => {
+  const entries = Array.from({ length: 8 }, (_, index) => JSON.stringify({ level: 'error', msg: `failure ${index}`,
+    error: 'dependency: '.repeat(1000) + `final cause ${index} password=short-secret`, stacktrace: 'discarded' }));
+  entries.push(...Array(10).fill(JSON.stringify({ level: 'info', msg: 'shutdown progress' })));
+  const errors = structuredErrors(entries.join('\n'));
+  assert.equal(errors.length, 3);
+  errors.forEach((error, index) => {
+    assert.ok(error.includes(`failure ${index + 5}`));
+    assert.ok(error.includes(`final cause ${index + 5}`));
+    assert.ok(!error.includes('short-secret'));
+    assert.ok(!error.includes('discarded'));
+    assert.ok(error.length <= 4096);
+  });
 });
 
 test('generated smoke firewall parses in an isolated Linux network namespace', { skip: process.platform !== 'linux' }, () => {

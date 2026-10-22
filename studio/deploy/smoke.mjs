@@ -44,6 +44,17 @@ export function diagnosticTail(value, secrets = generatedSecrets) {
   });
   return redactDiagnostic(lines.join('\n'), secrets, 4096);
 }
+export function structuredErrors(value, secrets = generatedSecrets) {
+  const errors = [];
+  for (const line of String(value || '').split('\n')) {
+    try {
+      const item = JSON.parse(line);
+      if (typeof item.error === 'string' || ['error', 'fatal', 'panic'].includes(item.level))
+        errors.push(redactDiagnostic(`${String(item.msg || '')}: ${String(item.error || '')}`, secrets, 4096));
+    } catch { /* Ordinary stderr is retained separately by diagnosticTail. */ }
+  }
+  return errors.slice(-3);
+}
 function command(executable, args, options = {}) {
   const { combineOutput = false, ...spawnOptions } = options;
   const result = spawnSync(executable, args, { encoding: 'utf8', timeout: 120000,
@@ -298,6 +309,7 @@ export async function smoke(artifactRoot) {
         return { name: row.Config.Labels['com.docker.compose.service'], status: row.State.Status,
           exitCode: row.State.ExitCode, oomKilled: row.State.OOMKilled, health: row.State.Health?.Status,
           logTail: diagnosticTail(logs),
+          errors: structuredErrors(logs),
           categories: ['permission denied', 'Cannot find module', 'Prisma', 'schema', 'Temporal', 'EACCES', 'EADDRINUSE']
             .filter(category => logs.includes(category)) };
       });
