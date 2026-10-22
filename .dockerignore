@@ -21,3 +21,5 @@ dist
 .git
 .github
 reports
+studio/deploy/smoke.mjs
+studio/deploy/smoke.test.mjs

@@ -77,7 +77,9 @@ export async function smoke(artifactRoot) {
   const definition = join(directory, 'compose.json');
   const report = { services: [], checks: [], outcome: 'failed', stage: 'driver-preflight' };
   let networkAdded = false, firewallAdded = false, slicesAdded = false, deploymentAttempted = false;
-  const dc = args => docker(['compose', '--project-name', id, '--project-directory', directory,
+  // Production invokes Compose as root so it can read root-owned 0640 env files.
+  // Public pinned GHCR images deliberately use anonymous root registry access.
+  const dc = args => root(['docker', '--host', 'unix:///var/run/docker.sock', 'compose', '--project-name', id, '--project-directory', directory,
     '--file', definition, ...args], { timeout: 480000 });
   const inspect = () => {
     const ids = dc(['ps', '--all', '--quiet']).trim().split(/\s+/).filter(Boolean);
