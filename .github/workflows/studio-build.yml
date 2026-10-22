@@ -22,6 +22,7 @@ jobs:
         with:
           version: '10.6.1'
       - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm exec prisma generate --schema libraries/nestjs-libraries/src/database/prisma/schema.prisma
       - run: pnpm exec jest --config apps/backend/jest.auth.config.cjs --runInBand
       - run: node --test studio/portal/*.test.mjs studio/publishing/*.test.mjs
       - run: python -m unittest discover -s studio/worker -p 'test_*.py' -v
