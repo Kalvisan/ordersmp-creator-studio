@@ -253,11 +253,12 @@ describe('Google-only admission and legacy endpoint rejection', () => {
       id: 'stranger-sub',
       email: 'stranger@example.com',
     });
-    await expect(finish(await start())).rejects.toThrow('invitation');
+    await expect(finish(await start())).rejects.toThrow('access list');
     await expect(
       finish(await start(invite('someone-else@example.com')))
-    ).rejects.toThrow('invitation');
+    ).rejects.toThrow('access list');
     expect(organizations.createOrgAndUser).not.toHaveBeenCalled();
+    expect(users.getUserByProvider).not.toHaveBeenCalled();
   });
   it('rejects expired, malformed or non-owner workspace invitations', async () => {
     provider.getVerifiedLoginIdentity.mockResolvedValue({
@@ -268,21 +269,22 @@ describe('Google-only admission and legacy endpoint rejection', () => {
       finish(
         await start(invite('expired@example.com', { timeLimit: '2000-01-01' }))
       )
-    ).rejects.toThrow('invitation');
+    ).rejects.toThrow('access list');
     await expect(
       finish(
         await start(invite('expired@example.com', { timeLimit: 'invalid' }))
       )
-    ).rejects.toThrow('invitation');
+    ).rejects.toThrow('access list');
     await expect(
       finish(
         await start(
           invite('expired@example.com', { orgId: 'someone-elses-org' })
         )
       )
-    ).rejects.toThrow('invitation');
+    ).rejects.toThrow('access list');
   });
-  it('admits the exact invited identity to a private workspace without joining the official organization', async () => {
+  it('admits only the exact listed identity to a private workspace without joining the official organization', async () => {
+    process.env.GOOGLE_AUTH_ALLOWED_EMAILS = 'invited@example.com';
     provider.getVerifiedLoginIdentity.mockResolvedValue({
       id: 'invited-sub',
       email: 'invited@example.com',
@@ -301,8 +303,24 @@ describe('Google-only admission and legacy endpoint rejection', () => {
       expect.any(String)
     );
     expect(organizations.addUserToOrg).not.toHaveBeenCalled();
-    // Admission survives the invitation without granting org membership.
+    // The explicit list, rather than the ignored invitation, grants admission.
     await expect(finish(await start())).resolves.toHaveProperty('jwt');
+  });
+  it('refuses matching owner invitations and historical Redis admissions before any user or organization creation', async () => {
+    const email = 'previously-invited@example.com',
+      id = 'previously-invited-sub';
+    provider.getVerifiedLoginIdentity.mockResolvedValue({ id, email });
+    await ioRedis.set(
+      `google-admission:${id}`,
+      JSON.stringify({ email, owner: 'owner@example.com' })
+    );
+    await expect(finish(await start(invite(email)))).rejects.toThrow(
+      'access list'
+    );
+    expect(users.getUserByProvider).not.toHaveBeenCalled();
+    expect(users.getUserByEmail).not.toHaveBeenCalled();
+    expect(organizations.createOrgAndUser).not.toHaveBeenCalled();
+    expect(organizations.addUserToOrg).not.toHaveBeenCalled();
   });
   it('never links a Google identity to an existing password account by email', async () => {
     process.env.GOOGLE_AUTH_ALLOWED_EMAILS = 'existing@example.com';
@@ -382,6 +400,54 @@ describe('Google-only admission and legacy endpoint rejection', () => {
     );
     expect(next).toHaveBeenCalledTimes(1);
   });
+  it.each(['cookie', 'header'])(
+    'revokes an existing %s session immediately when its email is removed',
+    async (transport) => {
+      const creator = {
+        ...owner,
+        id: 'creator-id',
+        email: 'creator@example.com',
+        providerId: 'creator-sub',
+      };
+      process.env.GOOGLE_AUTH_ALLOWED_EMAILS = creator.email;
+      const orgs = {
+        getOrgsByUserId: jest.fn(async () => [
+          {
+            id: 'private',
+            apiKey: 'internal-key',
+            users: [{ disabled: false }],
+          },
+        ]),
+        updateApiKey: jest.fn(),
+      };
+      const middleware = new AuthMiddleware(
+        orgs as any,
+        { getUserById: async () => ({ ...creator }) } as any
+      );
+      const token = Tokens.signJWT({
+        id: creator.id,
+        email: creator.email,
+        googleSub: creator.providerId,
+        authMethod: 'google-only',
+      });
+      const request = () => ({
+        headers: transport === 'header' ? { auth: token } : {},
+        cookies: transport === 'cookie' ? { auth: token } : {},
+      });
+      const next = jest.fn();
+      await middleware.use(request() as any, {} as any, next);
+      expect(next).toHaveBeenCalledTimes(1);
+      process.env.GOOGLE_AUTH_ALLOWED_EMAILS = '';
+      orgs.getOrgsByUserId.mockClear();
+      next.mockClear();
+      await expect(
+        middleware.use(request() as any, {} as any, next)
+      ).rejects.toMatchObject({ status: 403 });
+      expect(next).not.toHaveBeenCalled();
+      expect(orgs.getOrgsByUserId).not.toHaveBeenCalled();
+      expect(orgs.updateApiKey).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('Google provider verified identity', () => {

@@ -88,6 +88,7 @@ export function compose(environment = process.env) {
   services.worker.volumes.push(mount(data('media/inbox'), '/media/inbox', true), mount(data('media/renders'), '/media/renders'));
   services['studio-nginx'] = { ...base('studio-nginx', 18008, '128M', 0.05, 64, images.nginx, true),
     entrypoint: ['nginx'], command: ['-c', '/config/nginx.conf', '-g', 'daemon off;'],
+    healthcheck: health(['CMD', 'wget', '-q', '-O', '/dev/null', '--header', 'Host: studio.ordersmp.net', 'http://127.0.0.1:8444/auth/login']),
     depends_on: healthy(['postiz', 'gateway']) };
   services['studio-nginx'].volumes.push(mount(data('media/delivery'), '/media/delivery', true));
   return { name: 'ordersmp-creator', services };

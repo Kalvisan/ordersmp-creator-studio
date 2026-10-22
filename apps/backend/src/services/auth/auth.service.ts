@@ -14,6 +14,23 @@ import { ForgotReturnPasswordDto } from '@gitroom/nestjs-libraries/dtos/auth/for
 import { EmailService } from '@gitroom/nestjs-libraries/services/email.service';
 import { NewsletterService } from '@gitroom/nestjs-libraries/newsletter/newsletter.service';
 
+// Read current configuration on every admission check, including existing sessions.
+export function googleEmailAllowed(email: string) {
+  const owner = process.env.GOOGLE_AUTH_OWNER_EMAIL?.trim().toLowerCase();
+  const allowed = (process.env.GOOGLE_AUTH_ALLOWED_EMAILS || '')
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  return (
+    !!owner &&
+    isEmail(owner) &&
+    !owner.includes('*') &&
+    allowed.every((value) => isEmail(value) && !value.includes('*')) &&
+    typeof email === 'string' &&
+    [owner, ...allowed].includes(email.trim().toLowerCase())
+  );
+}
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -73,7 +90,7 @@ export class AuthService {
     };
   }
 
-  async startGoogleLogin(invitation?: string) {
+  async startGoogleLogin(_invitation?: string) {
     const config = this.googleLoginConfig();
     const state = randomBytes(32).toString('base64url');
     const browserSecret = randomBytes(32).toString('base64url');
@@ -95,43 +112,11 @@ export class AuthService {
         browserHash: createHash('sha256').update(browserSecret).digest('hex'),
         nonce,
         codeVerifier,
-        invitation,
       }),
       'EX',
       600
     );
     return { url, browserSecret };
-  }
-
-  private async ownerInvitation(email: string, cookie?: string) {
-    const invitation = this.getOrgFromCookie(cookie);
-    if (
-      !invitation ||
-      typeof invitation === 'boolean' ||
-      invitation.email?.toLowerCase() !== email ||
-      !invitation.id ||
-      !invitation.orgId
-    ) {
-      return false;
-    }
-    const owner = await this._userService.getGoogleUserByEmail(
-      this.googleLoginConfig().owner
-    );
-    if (!owner || owner.providerName !== Provider.GOOGLE || !owner.activated) {
-      return false;
-    }
-    const organizations = await this._organizationService.getOrgsByUserId(
-      owner.id
-    );
-    return organizations.some(
-      (org) =>
-        org.id === invitation.orgId &&
-        !org.deletedAt &&
-        org.users.some(
-          (membership) =>
-            membership.role === 'SUPERADMIN' && !membership.disabled
-        )
-    );
   }
 
   async finishGoogleLogin(
@@ -168,23 +153,11 @@ export class AuthService {
     if (!identity.id || !email || !isEmail(email)) {
       throw new ForbiddenException('Google identity could not be verified');
     }
-    const admissionKey = `google-admission:${identity.id}`;
-    const admitted = await ioRedis.get(admissionKey);
-    const approved =
-      email === config.owner ||
-      config.allowed.includes(email) ||
-      admitted === JSON.stringify({ email, owner: config.owner });
-    if (!approved) {
-      if (!(await this.ownerInvitation(email, context.invitation))) {
-        throw new ForbiddenException('Ask the owner for a creator invitation');
-      }
-      // Persist admission independently of team membership. Invited creators
-      // receive their own workspace, never access to the official organization.
-      await ioRedis.set(
-        admissionKey,
-        JSON.stringify({ email, owner: config.owner })
+    // Invitations and historical Redis admissions cannot extend this explicit list.
+    if (!googleEmailAllowed(email))
+      throw new ForbiddenException(
+        'Ask the owner to add your email to the access list'
       );
-    }
     let user = await this._userService.getUserByProvider(
       identity.id,
       Provider.GOOGLE

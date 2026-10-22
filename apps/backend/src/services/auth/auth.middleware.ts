@@ -8,6 +8,7 @@ import { getCookieUrlFromDomain } from '@gitroom/helpers/subdomain/subdomain.man
 import { HttpForbiddenException } from '@gitroom/nestjs-libraries/services/exception.filter';
 import { MastraService } from '@gitroom/nestjs-libraries/chat/mastra.service';
 import { setSentryUserContext } from '@gitroom/nestjs-libraries/sentry/initialize.sentry';
+import { googleEmailAllowed } from './auth.service';
 
 export const removeAuth = (res: Response) => {
   res.cookie('auth', '', {
@@ -71,7 +72,7 @@ export class AuthMiddleware implements NestMiddleware {
           !payload.googleSub ||
           payload.googleSub !== user.providerId ||
           payload.email?.toLowerCase() !== user.email.toLowerCase() ||
-          !process.env.GOOGLE_AUTH_OWNER_EMAIL)
+          !googleEmailAllowed(user.email))
       ) {
         throw new HttpForbiddenException();
       }

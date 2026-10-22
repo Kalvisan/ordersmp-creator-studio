@@ -101,7 +101,7 @@ export async function smoke(artifactRoot) {
   const table = `${id}_egress`;
   const definition = join(directory, 'compose.json');
   const report = { services: [], checks: [], outcome: 'failed', stage: 'driver-preflight' };
-  let networkAdded = false, firewallAdded = false, slicesAdded = false, deploymentAttempted = false;
+  let firewallAdded = false, slicesAdded = false, deploymentAttempted = false;
   // Production invokes Compose as root so it can read root-owned 0640 env files.
   // Public pinned GHCR images deliberately use anonymous root registry access.
   const dc = args => root(['docker', '--host', 'unix:///var/run/docker.sock', 'compose', '--project-name', id, '--project-directory', directory,
@@ -159,9 +159,6 @@ export async function smoke(artifactRoot) {
       if (name === 'postiz') await writeFile(join(config, 'nginx.conf'), await readFile(new URL('./postiz-nginx.conf', import.meta.url)), { mode: 0o640 });
       if (name === 'studio-nginx') {
         await writeFile(join(config, 'nginx.conf'), await readFile(new URL('./studio-nginx.conf', import.meta.url)), { mode: 0o640 });
-        command('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
-          '-subj', '/CN=studio.ordersmp.net', '-addext', 'subjectAltName=DNS:studio.ordersmp.net',
-          '-keyout', join(config, 'tls.key'), '-out', join(config, 'tls.crt')]);
       }
       root(['chown', '-R', `0:${uid}`, config]);
       root(['chmod', '0750', config]);
@@ -178,10 +175,6 @@ export async function smoke(artifactRoot) {
     // Pull first. All application UIDs then lose non-loopback network access.
     report.stage = 'image-pull';
     dc(['pull', '--quiet']);
-    report.stage = 'private-address';
-    const aliases = JSON.parse(root(['ip', '-j', 'address', 'show', 'dev', 'lo']));
-    checked(!aliases.some(row => row.addr_info.some(item => item.local === '10.64.64.1')), 'Private smoke address already exists');
-    root(['ip', 'address', 'add', '10.64.64.1/32', 'dev', 'lo']); networkAdded = true;
     const rules = smokeEgressRules(table);
     report.stage = 'egress-policy-check';
     root(['nft', '--check', '-f', '-'], { input: rules });
@@ -246,7 +239,7 @@ export async function smoke(artifactRoot) {
       for (const line of (await readFile(`/proc/net/${kind}`, 'utf8')).trim().split('\n').slice(1)) {
         const fields = line.trim().split(/\s+/), [address, portHex] = fields[1].split(':'), port = parseInt(portHex, 16);
         if (!ports.has(port) || (kind.startsWith('tcp') && fields[3] !== '0A')) continue;
-        checked(!kind.endsWith('6') && address === (port === 8444 ? '0140400A' : '0100007F') && Number(fields[7]) === ports.get(port),
+        checked(!kind.endsWith('6') && address === '0100007F' && Number(fields[7]) === ports.get(port),
           `Unexpected listener address or UID: ${port}/${kind}`);
         if (kind === 'tcp') observedTcp.add(port);
       }
@@ -259,12 +252,11 @@ export async function smoke(artifactRoot) {
     docker(['exec', '--user', '18007:18007', worker.Id, 'python', '-c',
       'import worker,subprocess; subprocess.run(["ffmpeg","-version"],check=True,stdout=subprocess.DEVNULL); assert worker.request("GET") is None']);
     report.checks.push('worker FFmpeg and authenticated private gateway probe passed');
-    const cert = join(directory, 'config', 'studio-nginx', 'tls.crt');
-    // Root reads the protected test certificate; the runner never prints responses or cookies.
-    const request = (path, args = []) => {
+    // Outer TLS and public-origin access are tested by the managed host vhost.
+    // This probe tests the inner loopback hop without printing responses/cookies.
+    const request = (path, args = [], host = 'studio.ordersmp.net') => {
       const output = root(['curl', '--silent', '--show-error', '--max-time', '20', '--noproxy', '*',
-        '--cacert', cert, '--resolve', 'studio.ordersmp.net:8444:10.64.64.1', '--include',
-        ...args, `https://studio.ordersmp.net:8444${path}`]);
+        '--header', `Host: ${host}`, '--include', ...args, `http://127.0.0.1:8444${path}`]);
       const boundary = output.indexOf('\r\n\r\n') >= 0 ? '\r\n\r\n' : '\n\n';
       const index = output.indexOf(boundary), headers = output.slice(0, index), body = output.slice(index + boundary.length);
       return { status: Number(/^HTTP\/\S+ (\d+)/.exec(headers)?.[1]), headers, body };
@@ -274,6 +266,7 @@ export async function smoke(artifactRoot) {
     assert.equal(portal.status, 303); assert.match(portal.headers, /location: \/auth\/login/i);
     const login = request('/auth/login');
     assert.equal(login.status, 200); assert.match(login.body, /Sign in with Google/);
+    assert.throws(() => request('/auth/login', [], 'unexpected.invalid'), error => error.diagnostic?.exitCode === 52);
     assert.equal(request('/api/uploads/smoke.mp4').status, 403);
     assert.equal(request('/uploads/smoke.mp4').status, 401);
     assert.equal(request('/creator/internal/jobs').status, 404);
@@ -296,7 +289,7 @@ export async function smoke(artifactRoot) {
     assert.equal(authorization.searchParams.get('redirect_uri'), 'https://studio.ordersmp.net/api/auth/google/callback');
     const loginCookie = start.headers.split(/\r?\n/).find(line => /^set-cookie: __Host-google-login=/i.test(line));
     checked(loginCookie && /HttpOnly/i.test(loginCookie) && /Secure/i.test(loginCookie) && /SameSite=Lax/i.test(loginCookie) && !/Domain=/i.test(loginCookie), 'Google state cookie protections missing');
-    report.checks.push('private uploads, forged sessions, legacy login and invalid Google callback denied', 'portal redirects to Google-only sign-in; state cookie and PKCE present', 'application egress blocked throughout runtime; no live provider calls');
+    report.checks.push('private uploads, forged sessions, legacy login and invalid Google callback denied', 'portal redirects to Google-only sign-in; state cookie and PKCE present', 'inner loopback HTTP verified; public TLS and Cloudflare routing are outside this probe', 'application egress blocked throughout runtime; no live provider calls');
     report.outcome = 'passed';
     report.stage = 'verified';
   } catch (error) {
@@ -323,7 +316,6 @@ export async function smoke(artifactRoot) {
     }
     if (containersStopped) {
       if (firewallAdded) try { root(['nft', 'delete', 'table', 'inet', table]); } catch { report.cleanupWarning = true; }
-      if (networkAdded) try { root(['ip', 'address', 'del', '10.64.64.1/32', 'dev', 'lo']); } catch { report.cleanupWarning = true; }
       if (slicesAdded) {
         try {
           root(['systemctl', 'stop', workerSlice, slice]);

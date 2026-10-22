@@ -465,8 +465,8 @@ $('upload').addEventListener('submit', (event) => {
   const form = event.currentTarget,
     file = form.elements.file.files[0];
   if (!file) return;
-  if (file.size > 20 * 1024 ** 3)
-    return notice('Choose a video smaller than 20 GiB.');
+  if (file.size > 90 * 1024 ** 2)
+    return notice('Choose a video smaller than 90 MiB for now.');
   const submit = form.querySelector('button'),
     xhr = new XMLHttpRequest();
   submit.disabled = true;
