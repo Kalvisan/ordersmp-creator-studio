@@ -14,7 +14,7 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.enableShutdownHooks();
   const port = process.env.ORCHESTRATOR_PORT || 3002;
-  await app.listen(port);
+  await app.listen(port, process.env.GOOGLE_ONLY_AUTH === 'true' ? '127.0.0.1' : '0.0.0.0');
   console.log(`Orchestrator health check listening on port ${port}`);
 }
 

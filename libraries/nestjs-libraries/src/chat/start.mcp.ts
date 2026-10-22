@@ -34,6 +34,16 @@ const oauthScopes = [
 ];
 
 export const startMcp = async (app: INestApplication) => {
+  if (process.env.GOOGLE_ONLY_AUTH === 'true') {
+    // The separate review gateway exposes only permitted draft/read tools.
+    // Native MCP tools hold organisation-wide authority and bypass HTTP guards.
+    app.use(['/mcp', '/mcp/:id', '/mcp-oauth', '/mcp-oauth-chatgpt',
+      '/mcp-oauth-claude', '/mcp-oauth-dynamic', '/sse/:id', '/message/:id'],
+    (_req: Request, res: Response) => {
+      res.status(403).json({ error: 'Use the restricted creator review gateway' });
+    });
+    return;
+  }
   const mastraService = app.get(MastraService, { strict: false });
   const organizationService = app.get(OrganizationService, { strict: false });
   const oauthService = app.get(OAuthService, { strict: false });

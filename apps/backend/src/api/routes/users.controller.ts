@@ -31,6 +31,7 @@ import { UserAgent } from '@gitroom/nestjs-libraries/user/user.agent';
 import { TrackEnum } from '@gitroom/nestjs-libraries/user/track.enum';
 import { TrackService } from '@gitroom/nestjs-libraries/track/track.service';
 import { makeId } from '@gitroom/nestjs-libraries/services/make.is';
+import { isCreatorOwner } from '@gitroom/backend/services/auth/permissions/creator.publishing.guard';
 import {
   AuthorizationActions,
   Sections,
@@ -104,6 +105,28 @@ export class UsersController {
   ) {
     if (!organization) {
       throw new HttpForbiddenException();
+    }
+
+    if (process.env.GOOGLE_ONLY_AUTH === 'true') {
+      // Never return a raw User row or an organisation key to creators, whose
+      // private organisation may legitimately have the legacy SUPERADMIN role.
+      const owner = isCreatorOwner(user);
+      return {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        timezone: user.timezone,
+        orgId: organization.id,
+        role: owner ? 'SUPERADMIN' : 'USER',
+        admin: false,
+        impersonate: false,
+        totalChannels: owner ? 10000 : 0,
+        tier: 'ULTIMATE',
+        isLifetime: false,
+        isTrailing: false,
+        allowTrial: false,
+        streakSince: null,
+      };
     }
 
     const impersonate = req.cookies.impersonate || req.headers.impersonate;
@@ -297,14 +320,20 @@ export class UsersController {
   }
 
   @Get('/organizations')
-  async getOrgs(@GetUserFromRequest() user: User) {
+  async getOrgs(
+    @GetUserFromRequest() user: User,
+    @GetOrgFromRequest() organization: Organization
+  ) {
     return (await this._orgService.getOrgsByUserId(user.id))
       .filter((f) => !f.users[0].disabled)
+      .filter((f) => process.env.GOOGLE_ONLY_AUTH !== 'true' ||
+        isCreatorOwner(user) || f.id === organization.id)
       .map((p) => ({
         id: p.id,
         name: p.name,
-        users: p.users,
-        subscription: p.subscription,
+        ...(process.env.GOOGLE_ONLY_AUTH === 'true'
+          ? { users: [{ role: isCreatorOwner(user) ? 'SUPERADMIN' : 'USER' }] }
+          : { users: p.users, subscription: p.subscription }),
       }));
   }
 
@@ -373,8 +402,10 @@ export class UsersController {
   logout(@Res({ passthrough: true }) response: Response) {
     response.header('logout', 'true');
     response.cookie('auth', '', {
-      domain: getCookieUrlFromDomain(process.env.FRONTEND_URL!),
-      ...(!process.env.NOT_SECURED
+      ...(process.env.GOOGLE_ONLY_AUTH === 'true'
+        ? { secure: true, httpOnly: true, sameSite: 'lax' as const, path: '/' }
+        : { domain: getCookieUrlFromDomain(process.env.FRONTEND_URL!) }),
+      ...(!process.env.NOT_SECURED && process.env.GOOGLE_ONLY_AUTH !== 'true'
         ? {
             secure: true,
             httpOnly: true,

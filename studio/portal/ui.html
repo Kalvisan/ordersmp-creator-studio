@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Creator Studio | OrderSMP</title>
+    <link rel="stylesheet" href="/creator/portal.css" />
+    <script type="module" src="/creator/portal.js"></script>
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to recordings</a>
+    <header>
+      <a class="brand" href="/creator"
+        ><img src="/brand/logo.png" alt="" width="40" height="40" />OrderSMP
+        <span>Creator Studio</span></a
+      >
+      <nav aria-label="Studio">
+        <a href="/">Publishing workspace</a
+        ><button id="refresh" type="button">Refresh</button>
+      </nav>
+    </header>
+    <main id="main">
+      <p class="eyebrow">Minecraft. On record.</p>
+      <h1>From recording to review.</h1>
+      <p>
+        Upload your recording, prepare clips and check every detail. The channel
+        owner approves each publishing schedule.
+      </p>
+      <p id="session"></p>
+      <p id="notice" role="status" aria-live="polite"></p>
+      <section aria-labelledby="upload-heading">
+        <h2 id="upload-heading">Add a recording</h2>
+        <form id="upload">
+          <label
+            >Recording title<input
+              name="title"
+              required
+              maxlength="180"
+              autocomplete="off" /></label
+          ><label
+            >Video file<input
+              name="file"
+              type="file"
+              accept="video/mp4,video/quicktime,video/x-matroska,.mkv"
+              required
+          /></label>
+          <p class="hint">
+            MP4, MOV or MKV. Up to 20 GiB. Keep this tab open during the upload.
+          </p>
+          <button type="submit">Upload recording</button
+          ><progress
+            id="progress"
+            max="100"
+            value="0"
+            hidden
+            aria-label="Upload progress"
+          ></progress>
+        </form>
+      </section>
+      <section aria-labelledby="recordings-heading">
+        <h2 id="recordings-heading">Your recordings</h2>
+        <p class="hint">
+          Automatic suggestions use sound levels. Review the context, framing
+          and speech yourself. Transcription runs only when the server has a
+          speech model configured.
+        </p>
+        <div id="recordings"><p>Loading recordings...</p></div>
+      </section>
+      <section aria-labelledby="drafts-heading">
+        <h2 id="drafts-heading">Clips and drafts</h2>
+        <p class="hint">
+          The first lines should explain the clip before a viewer opens the full
+          description. Creator credit is added from the permission record.
+        </p>
+        <div id="drafts"></div>
+      </section>
+      <section id="calendar-section" hidden aria-labelledby="calendar-heading">
+        <h2 id="calendar-heading">Publishing queue</h2>
+        <p>
+          Times use your browser's local time zone. Accepted means Postiz has
+          the job. Published means a platform result has been recorded.
+        </p>
+        <div id="calendar"></div>
+      </section>
+    </main>
+    <footer>
+      <a href="https://github.com/Kalvisan/ordersmp-creator-studio">Source and licence</a
+      ><span>OrderSMP Creator Studio</span>
+    </footer>
+  </body>
+</html>

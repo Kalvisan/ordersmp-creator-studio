@@ -1,0 +1,6 @@
+compose.json
+compose.policy-test.json
+*.env
+*.key
+*.crt
+*.pem

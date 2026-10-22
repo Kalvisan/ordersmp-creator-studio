@@ -37,6 +37,76 @@ export class AuthController {
     private _emailService: EmailService
   ) {}
 
+  @UseGuards(ThrottlerRealIpGuard)
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
+  @Get('/google/start')
+  async googleStart(
+    @Req() req: Request,
+    @Res({ passthrough: true }) response: Response
+  ) {
+    const { url, browserSecret } = await this._authService.startGoogleLogin(
+      req.cookies?.org
+    );
+    response.header('Cache-Control', 'no-store');
+    response.cookie('__Host-google-login', browserSecret, {
+      secure: true,
+      httpOnly: true,
+      sameSite: 'lax',
+      path: '/',
+      maxAge: 600000,
+    });
+    return { url };
+  }
+
+  @Get('/google/callback')
+  async googleCallback(
+    @Req() req: Request,
+    @Query('code') code: string,
+    @Query('state') state: string,
+    @Res({ passthrough: false }) response: Response,
+    @RealIP() ip: string,
+    @UserAgent() userAgent: string
+  ) {
+    response.header('Cache-Control', 'no-store');
+    response.header('Referrer-Policy', 'no-referrer');
+    response.clearCookie('__Host-google-login', {
+      secure: true,
+      httpOnly: true,
+      sameSite: 'lax',
+      path: '/',
+    });
+    try {
+      const result = await this._authService.finishGoogleLogin(
+        code,
+        state,
+        req.cookies?.['__Host-google-login'],
+        ip,
+        userAgent
+      );
+      response.cookie('auth', result.jwt, {
+        secure: true,
+        httpOnly: true,
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 8 * 60 * 60 * 1000,
+      });
+      response.clearCookie('org', {
+        secure: true,
+        httpOnly: true,
+        sameSite: 'lax',
+        path: '/',
+      });
+      return response.redirect(303, result.frontend);
+    } catch {
+      // Never send provider errors, codes or tokens to the browser or logs.
+      return response
+        .status(403)
+        .send(
+          'Google sign-in was not approved. Open the sign-in page and try again, or ask the owner for an invitation.'
+        );
+    }
+  }
+
   @Get('/can-register')
   async canRegister() {
     return {
@@ -210,6 +280,7 @@ export class AuthController {
     @Query('state') state: string,
     @Res({ passthrough: false }) response: Response
   ) {
+    this._authService.assertLegacyLoginAllowed();
     const scheme = process.env.MOBILE_APP_SCHEME || 'postiz://auth/callback';
     const params = new URLSearchParams();
     if (code) params.set('code', code);
@@ -223,6 +294,7 @@ export class AuthController {
     @Query() query: any,
     @Res({ passthrough: true }) response: Response
   ) {
+    this._authService.assertLegacyLoginAllowed();
     const state = `login-${makeSecureId(16)}`;
     response.cookie('oauth_state', state, {
       domain: getCookieUrlFromDomain(process.env.FRONTEND_URL!),
@@ -294,6 +366,7 @@ export class AuthController {
   @Throttle({ default: { limit: 30, ttl: 3600000 } })
   @Post('/farcaster/signer')
   async farcasterSigner() {
+    this._authService.assertLegacyLoginAllowed();
     try {
       return await new FarcasterProvider().createSigner();
     } catch (err: any) {
@@ -306,6 +379,7 @@ export class AuthController {
   @Throttle({ default: { limit: 1000, ttl: 3600000 } })
   @Get('/farcaster/signer')
   async farcasterSignerStatus(@Query('signerUuid') signerUuid: string) {
+    this._authService.assertLegacyLoginAllowed();
     try {
       return await new FarcasterProvider().signerStatus(signerUuid);
     } catch (err: any) {
@@ -320,6 +394,7 @@ export class AuthController {
     @Body('state') state: string,
     @Res({ passthrough: false }) response: Response
   ) {
+    this._authService.assertLegacyLoginAllowed();
     if (!code) {
       return response.redirect(303, `${process.env.FRONTEND_URL}/auth/login`);
     }

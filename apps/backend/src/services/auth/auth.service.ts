@@ -1,4 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable } from '@nestjs/common';
+import { createHash, randomBytes } from 'crypto';
+import { isEmail } from 'class-validator';
+import { ioRedis } from '@gitroom/nestjs-libraries/redis/redis.service';
 import { Provider, User } from '@prisma/client';
 import { CreateOrgUserDto } from '@gitroom/nestjs-libraries/dtos/auth/create.org.user.dto';
 import { LoginUserDto } from '@gitroom/nestjs-libraries/dtos/auth/login.user.dto';
@@ -19,7 +22,216 @@ export class AuthService {
     private _emailService: EmailService,
     private _providerManager: AuthProviderManager
   ) {}
+
+  googleOnly() {
+    return process.env.GOOGLE_ONLY_AUTH === 'true';
+  }
+
+  assertLegacyLoginAllowed() {
+    if (this.googleOnly()) {
+      throw new ForbiddenException('Use Google to sign in');
+    }
+  }
+
+  private googleLoginConfig() {
+    if (!this.googleOnly()) {
+      throw new ForbiddenException('Google-only login is disabled');
+    }
+    const owner = process.env.GOOGLE_AUTH_OWNER_EMAIL?.trim().toLowerCase();
+    const allowed = (process.env.GOOGLE_AUTH_ALLOWED_EMAILS || '')
+      .split(',')
+      .map((email) => email.trim().toLowerCase())
+      .filter(Boolean);
+    const frontend = new URL(process.env.FRONTEND_URL || '');
+    const callback = new URL(process.env.GOOGLE_AUTH_CALLBACK_URL || '');
+    if (
+      !owner ||
+      !isEmail(owner) ||
+      owner.includes('*') ||
+      allowed.some((email) => !isEmail(email) || email.includes('*')) ||
+      frontend.protocol !== 'https:' ||
+      callback.protocol !== 'https:' ||
+      frontend.origin !== callback.origin ||
+      callback.username ||
+      callback.password ||
+      callback.search ||
+      callback.hash ||
+      !callback.pathname.endsWith('/auth/google/callback') ||
+      !process.env.REDIS_URL ||
+      process.env.NOT_SECURED ||
+      !process.env.GOOGLE_AUTH_CLIENT_ID ||
+      !process.env.GOOGLE_AUTH_CLIENT_SECRET ||
+      process.env.GOOGLE_AUTH_CLIENT_ID === process.env.YOUTUBE_CLIENT_ID
+    ) {
+      throw new ForbiddenException('Google login configuration is incomplete');
+    }
+    return {
+      owner,
+      allowed,
+      callback: callback.toString(),
+      frontend: frontend.toString(),
+    };
+  }
+
+  async startGoogleLogin(invitation?: string) {
+    const config = this.googleLoginConfig();
+    const state = randomBytes(32).toString('base64url');
+    const browserSecret = randomBytes(32).toString('base64url');
+    const nonce = randomBytes(32).toString('base64url');
+    const codeVerifier = randomBytes(32).toString('base64url');
+    const url = this._providerManager
+      .getProvider(Provider.GOOGLE)
+      .generateSecureLoginLink({
+        redirectUri: config.callback,
+        state,
+        nonce,
+        codeChallenge: createHash('sha256')
+          .update(codeVerifier)
+          .digest('base64url'),
+      });
+    await ioRedis.set(
+      `google-login:${state}`,
+      JSON.stringify({
+        browserHash: createHash('sha256').update(browserSecret).digest('hex'),
+        nonce,
+        codeVerifier,
+        invitation,
+      }),
+      'EX',
+      600
+    );
+    return { url, browserSecret };
+  }
+
+  private async ownerInvitation(email: string, cookie?: string) {
+    const invitation = this.getOrgFromCookie(cookie);
+    if (
+      !invitation ||
+      typeof invitation === 'boolean' ||
+      invitation.email?.toLowerCase() !== email ||
+      !invitation.id ||
+      !invitation.orgId
+    ) {
+      return false;
+    }
+    const owner = await this._userService.getGoogleUserByEmail(
+      this.googleLoginConfig().owner
+    );
+    if (!owner || owner.providerName !== Provider.GOOGLE || !owner.activated) {
+      return false;
+    }
+    const organizations = await this._organizationService.getOrgsByUserId(
+      owner.id
+    );
+    return organizations.some(
+      (org) =>
+        org.id === invitation.orgId &&
+        !org.deletedAt &&
+        org.users.some(
+          (membership) =>
+            membership.role === 'SUPERADMIN' && !membership.disabled
+        )
+    );
+  }
+
+  async finishGoogleLogin(
+    code: string,
+    state: string,
+    browserSecret: string,
+    ip: string,
+    userAgent: string
+  ) {
+    const config = this.googleLoginConfig();
+    if (!code || !/^[A-Za-z0-9_-]{43}$/.test(state || '') || !browserSecret) {
+      throw new ForbiddenException('Google sign-in expired. Sign in again.');
+    }
+    // GETDEL makes the callback single use even across server replicas.
+    const pending = await ioRedis.getdel(`google-login:${state}`);
+    if (!pending) {
+      throw new ForbiddenException('Google sign-in expired. Sign in again.');
+    }
+    const context = JSON.parse(pending);
+    if (
+      context.browserHash !==
+      createHash('sha256').update(browserSecret).digest('hex')
+    ) {
+      throw new ForbiddenException('Google sign-in did not match this browser');
+    }
+    const identity = await this._providerManager
+      .getProvider(Provider.GOOGLE)
+      .getVerifiedLoginIdentity(code, {
+        redirectUri: config.callback,
+        nonce: context.nonce,
+        codeVerifier: context.codeVerifier,
+      });
+    const email = identity.email?.trim().toLowerCase();
+    if (!identity.id || !email || !isEmail(email)) {
+      throw new ForbiddenException('Google identity could not be verified');
+    }
+    const admissionKey = `google-admission:${identity.id}`;
+    const admitted = await ioRedis.get(admissionKey);
+    const approved =
+      email === config.owner ||
+      config.allowed.includes(email) ||
+      admitted === JSON.stringify({ email, owner: config.owner });
+    if (!approved) {
+      if (!(await this.ownerInvitation(email, context.invitation))) {
+        throw new ForbiddenException('Ask the owner for a creator invitation');
+      }
+      // Persist admission independently of team membership. Invited creators
+      // receive their own workspace, never access to the official organization.
+      await ioRedis.set(
+        admissionKey,
+        JSON.stringify({ email, owner: config.owner })
+      );
+    }
+    let user = await this._userService.getUserByProvider(
+      identity.id,
+      Provider.GOOGLE
+    );
+    if (user && user.email.toLowerCase() !== email) {
+      throw new ForbiddenException(
+        'Google account identity has changed. Contact the owner.'
+      );
+    }
+    if (!user) {
+      if (await this._userService.getUserByEmail(email)) {
+        throw new ForbiddenException(
+          'This email belongs to another sign-in account'
+        );
+      }
+      const created = await this._organizationService.createOrgAndUser(
+        {
+          company:
+            email === config.owner ? 'Creator Studio' : 'Creator workspace',
+          email,
+          password: '',
+          provider: Provider.GOOGLE,
+          providerId: identity.id,
+          datafast_visitor_id: '',
+        },
+        ip,
+        userAgent
+      );
+      user = created.users[0].user;
+    }
+    if (!user.activated || user.deletedAt) {
+      throw new ForbiddenException('This account is disabled');
+    }
+    return {
+      jwt: AuthChecker.signJWT({
+        id: user.id,
+        email,
+        authMethod: 'google-only',
+        googleSub: identity.id,
+        exp: Math.floor(Date.now() / 1000) + 60 * 60 * 8,
+      }),
+      frontend: config.frontend,
+    };
+  }
+
   async canRegister(provider: string) {
+    if (this.googleOnly()) return false;
     if (
       process.env.DISABLE_REGISTRATION !== 'true' ||
       provider === Provider.GENERIC
@@ -37,6 +249,7 @@ export class AuthService {
     userAgent: string,
     addToOrg?: boolean | { orgId: string; role: 'USER' | 'ADMIN'; id: string }
   ) {
+    this.assertLegacyLoginAllowed();
     if (provider === Provider.LOCAL) {
       if (process.env.DISALLOW_PLUS && body.email.includes('+')) {
         throw new Error('Email with plus sign is not allowed');
@@ -116,7 +329,11 @@ export class AuthService {
 
     try {
       const getOrg: any = AuthChecker.verifyJWT(cookie);
-      if (dayjs(getOrg.timeLimit).isBefore(dayjs())) {
+      if (
+        !getOrg.timeLimit ||
+        !dayjs(getOrg.timeLimit).isValid() ||
+        dayjs(getOrg.timeLimit).isBefore(dayjs())
+      ) {
         return false;
       }
 
@@ -212,6 +429,7 @@ export class AuthService {
   }
 
   async forgot(email: string) {
+    this.assertLegacyLoginAllowed();
     const user = await this._userService.getUserByEmail(email);
     if (!user || user.providerName !== Provider.LOCAL) {
       return false;
@@ -230,6 +448,7 @@ export class AuthService {
   }
 
   forgotReturn(body: ForgotReturnPasswordDto) {
+    this.assertLegacyLoginAllowed();
     const user = AuthChecker.verifyJWT(body.token) as {
       id: string;
       expires: string;
@@ -242,6 +461,7 @@ export class AuthService {
   }
 
   async activate(code: string, tracking: string) {
+    this.assertLegacyLoginAllowed();
     const user = AuthChecker.verifyJWT(code) as {
       id: string;
       activated: boolean;
@@ -263,6 +483,7 @@ export class AuthService {
   }
 
   async resendActivationEmail(email: string) {
+    this.assertLegacyLoginAllowed();
     const user = await this._userService.getUserByEmail(email);
 
     if (!user) {
@@ -285,6 +506,7 @@ export class AuthService {
   }
 
   oauthLink(provider: string, query?: any) {
+    this.assertLegacyLoginAllowed();
     const providerInstance = this._providerManager.getProvider(provider);
     return providerInstance.generateLink(query);
   }
@@ -296,6 +518,7 @@ export class AuthService {
     state?: string,
     stateCookie?: string
   ) {
+    this.assertLegacyLoginAllowed();
     // the mobile app passes redirect_uri and keeps no cookies, the web flow
     // never passes it, so the state nonce is only enforced for the web flow
     if (

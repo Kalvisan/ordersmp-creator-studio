@@ -172,6 +172,17 @@ export class UsersRepository {
     });
   }
 
+  getGoogleUserByEmail(email: string) {
+    return this._user.model.user.findFirst({
+      where: {
+        email: { equals: email, mode: 'insensitive' },
+        providerName: Provider.GOOGLE,
+        deletedAt: null,
+      },
+      select: { id: true, email: true, providerName: true, providerId: true, activated: true },
+    });
+  }
+
   async deleteAccount(userId: string) {
     const user = await this._user.model.user.findUnique({
       where: {

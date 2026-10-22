@@ -22,7 +22,7 @@ type Inputs = {
   providerToken: '';
   provider: 'LOCAL';
 };
-export function Login() {
+export function Login({ googleOnly = false }: { googleOnly?: boolean }) {
   const t = useT();
   const [loading, setLoading] = useState(false);
   const [notActivated, setNotActivated] = useState(false);
@@ -66,6 +66,15 @@ export function Login() {
       setLoading(false);
     }
   };
+  if (googleOnly) {
+    return (
+      <div className="flex flex-col flex-1 gap-6">
+        <h1 className="text-3xl font-medium">Sign in with Google</h1>
+        <p>Use the Google account the owner invited.</p>
+        <GoogleProvider googleOnly />
+      </div>
+    );
+  }
   return (
     <FormProvider {...form}>
       <form className="flex-1 flex" onSubmit={form.handleSubmit(onSubmit)}>

@@ -1,0 +1,74 @@
+# enable-template
+# Loopback RPC is isolated by the host's per-UID firewall, not publicly served.
+log:
+  stdout: true
+  level: warn
+persistence:
+  numHistoryShards: 4
+  defaultStore: default
+  visibilityStore: visibility
+  datastores:
+    default:
+      sql:
+        pluginName: postgres12
+        databaseName: temporal
+        connectAddr: 127.0.0.1:15433
+        connectProtocol: tcp
+        user: temporal
+        password: {{ env "SQL_PASSWORD" | quote }}
+        maxConns: 10
+        maxIdleConns: 5
+        maxConnLifetime: 1h
+    visibility:
+      sql:
+        pluginName: postgres12
+        databaseName: temporal_visibility
+        connectAddr: 127.0.0.1:15433
+        connectProtocol: tcp
+        user: temporal
+        password: {{ env "SQL_PASSWORD" | quote }}
+        maxConns: 5
+        maxIdleConns: 2
+        maxConnLifetime: 1h
+global:
+  membership:
+    maxJoinDuration: 30s
+    broadcastAddress: 127.0.0.1
+services:
+  frontend:
+    rpc:
+      grpcPort: 17233
+      membershipPort: 17333
+      bindOnIP: 127.0.0.1
+      httpPort: 18233
+  history:
+    rpc:
+      grpcPort: 17234
+      membershipPort: 17334
+      bindOnIP: 127.0.0.1
+  matching:
+    rpc:
+      grpcPort: 17235
+      membershipPort: 17335
+      bindOnIP: 127.0.0.1
+  worker:
+    rpc:
+      grpcPort: 17236
+      membershipPort: 17339
+      bindOnIP: 127.0.0.1
+clusterMetadata:
+  enableGlobalNamespace: false
+  failoverVersionIncrement: 10
+  masterClusterName: active
+  currentClusterName: active
+  clusterInformation:
+    active:
+      enabled: true
+      initialFailoverVersion: 1
+      rpcName: frontend
+      rpcAddress: 127.0.0.1:17233
+      httpAddress: 127.0.0.1:18233
+dcRedirectionPolicy:
+  policy: noop
+publicClient:
+  hostPort: 127.0.0.1:17233

@@ -133,6 +133,11 @@ const authenticatedController = [
 export class ApiModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
     consumer.apply(AuthMiddleware).forRoutes(...authenticatedController);
+    if (process.env.GOOGLE_ONLY_AUTH === 'true') {
+      // OAuth completion still requires the signed-in owner. A state token
+      // alone must not admit a creator to connector management.
+      consumer.apply(AuthMiddleware).forRoutes(NoAuthIntegrationsController);
+    }
     consumer.apply(UploadWidgetAuthMiddleware).forRoutes(MediaWidgetController);
     consumer
       .apply(ClippingWidgetAuthMiddleware)

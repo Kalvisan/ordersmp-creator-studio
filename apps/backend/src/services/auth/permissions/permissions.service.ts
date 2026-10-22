@@ -52,6 +52,10 @@ export class PermissionsService {
       !process.env.STRIPE_PUBLISHABLE_KEY
     ) {
       for (const [action, section] of requestedPermission) {
+        if (process.env.GOOGLE_ONLY_AUTH === 'true' && section === Sections.ADMIN &&
+            !['ADMIN', 'SUPERADMIN'].includes(permission)) {
+          continue;
+        }
         can(action, section);
       }
       return build({

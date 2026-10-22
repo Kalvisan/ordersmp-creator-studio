@@ -41,6 +41,10 @@ export class UsersService {
     return this._usersRepository.getUserByProvider(providerId, provider);
   }
 
+  getGoogleUserByEmail(email: string) {
+    return this._usersRepository.getGoogleUserByEmail(email);
+  }
+
   async switchUser(
     currentUserId: string,
     targetUserId: string,
