@@ -13,7 +13,7 @@ import {
   AbilityPolicy,
   CHECK_POLICIES_KEY,
 } from '@gitroom/backend/services/auth/permissions/permissions.ability';
-import { Organization } from '@prisma/client';
+import type { Organization, Role } from '@prisma/client';
 import { Request } from 'express';
 import { SubscriptionException } from './permission.exception.class';
 import { OrganizationService } from '@gitroom/nestjs-libraries/database/prisma/organizations/organization.service';
@@ -24,6 +24,10 @@ import {
   CreatorRequest,
   isCreatorOwner,
 } from './creator.publishing.guard';
+
+type AuthorizedRequest = Request & {
+  org: Organization & { users: { role: Role }[] };
+};
 
 @Injectable()
 export class PoliciesGuard implements CanActivate {
@@ -50,7 +54,7 @@ export class PoliciesGuard implements CanActivate {
   );
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const request: Request = context.switchToHttp().getRequest();
+    const request = context.switchToHttp().getRequest<AuthorizedRequest>();
     // This runs before the legacy anonymous/provider/subscription shortcuts.
     // Creator roles and publishing approval must not depend on Stripe settings.
     if (process.env.GOOGLE_ONLY_AUTH === 'true') {
@@ -75,16 +79,13 @@ export class PoliciesGuard implements CanActivate {
       return true;
     }
 
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-expect-error
-    const { org }: { org: Organization } = request;
+    const { org } = request;
 
     const refreshChannelId =
       typeof request.query?.refresh === 'string'
         ? request.query.refresh
         : undefined;
 
-    // @ts-ignore
     const ability = await this._authorizationService.check(
       org.id,
       org.createdAt,
@@ -192,11 +193,10 @@ export class PoliciesGuard implements CanActivate {
           if (request.body?.type !== 'draft') throw deny();
           await this.checkExistingPosts(request, true);
         } else if (handler === 'deletePost') {
+          const group = request.params.group;
+          if (typeof group !== 'string' || !group.trim()) throw deny();
           this.requireDraft(
-            await this._posts.getPostsByGroup(
-              request.org.id,
-              request.params.group
-            )
+            await this._posts.getPostsByGroup(request.org.id, group)
           );
         }
       }

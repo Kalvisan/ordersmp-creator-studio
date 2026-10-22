@@ -318,6 +318,29 @@ describe('Google-only creator and publisher route boundaries', () => {
       guard.canActivate(context('PostsController', 'createPost', creator()))
     ).resolves.toBe(true);
   });
+  it.each([
+    { group: undefined },
+    { group: [] },
+    { group: ['group'] },
+    { group: '' },
+    { group: '   ' },
+  ])(
+    'rejects a non-scalar or empty creator delete group: $group',
+    async ({ group }) => {
+      const req = { ...creator(), params: { group } };
+      await expect(
+        guard.canActivate(context('PostsController', 'deletePost', req))
+      ).rejects.toThrow(ForbiddenException);
+      expect(posts.getPostsByGroup).not.toHaveBeenCalled();
+    }
+  );
+  it('checks a scalar creator delete group in the current private organisation', async () => {
+    const req = { ...creator(), params: { group: 'group-id' } };
+    await expect(
+      guard.canActivate(context('PostsController', 'deletePost', req))
+    ).resolves.toBe(true);
+    expect(posts.getPostsByGroup).toHaveBeenCalledWith('personal', 'group-id');
+  });
   it.each(['now', 'schedule', 'update'])(
     'rejects creator %s writes before existing subscription/provider bypasses',
     async (type) => {
