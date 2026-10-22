@@ -31,19 +31,23 @@ export function redactDiagnostic(value, secrets = generatedSecrets) {
     .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '')
     .split('\n').slice(0, 6).join('\n').slice(0, 800);
 }
+export function diagnosticTail(value, secrets = generatedSecrets) {
+  return redactDiagnostic(String(value || '').trimEnd().split('\n').slice(-6).join('\n'), secrets);
+}
 function command(executable, args, options = {}) {
+  const { combineOutput = false, ...spawnOptions } = options;
   const result = spawnSync(executable, args, { encoding: 'utf8', timeout: 120000,
-    maxBuffer: 8 * 1024 * 1024, ...options });
+    maxBuffer: 8 * 1024 * 1024, ...spawnOptions });
   if (result.status !== 0 || result.error) {
     const program = executable === 'sudo' ? args[1] : executable;
     const candidate = args[executable === 'sudo' ? 2 : executable === 'docker' ? 2 : 0];
     const subcommand = /^[a-z][a-z-]*$/.test(candidate || '') ? candidate : undefined;
     const error = new Error(`Command failed: ${program}${subcommand ? ` ${subcommand}` : ''}`);
     error.diagnostic = { executable: program, subcommand, exitCode: result.status,
-      timedOut: result.error?.code === 'ETIMEDOUT', stderr: redactDiagnostic(result.stderr) };
+      timedOut: result.error?.code === 'ETIMEDOUT', stderr: diagnosticTail(result.stderr) };
     throw error;
   }
-  return result.stdout;
+  return combineOutput ? `${result.stdout || ''}\n${result.stderr || ''}` : result.stdout;
 }
 function root(args, options) { return command('sudo', ['-n', ...args], options); }
 function docker(args, options) { return command('docker', ['--host', 'unix:///var/run/docker.sock', ...args], options); }
@@ -280,9 +284,10 @@ export async function smoke(artifactRoot) {
     if (error.diagnostic) report.commandFailure = error.diagnostic;
     try {
       report.diagnostics = inspect().map(row => {
-        const logs = docker(['logs', '--tail', '200', row.Id]);
+        const logs = docker(['logs', '--tail', '40', row.Id], { combineOutput: true, timeout: 15000, maxBuffer: 1024 * 1024 });
         return { name: row.Config.Labels['com.docker.compose.service'], status: row.State.Status,
           exitCode: row.State.ExitCode, oomKilled: row.State.OOMKilled, health: row.State.Health?.Status,
+          logTail: diagnosticTail(logs),
           categories: ['permission denied', 'Cannot find module', 'Prisma', 'schema', 'Temporal', 'EACCES', 'EADDRINUSE']
             .filter(category => logs.includes(category)) };
       });

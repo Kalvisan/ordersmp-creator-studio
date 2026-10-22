@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { terminateSmokeContainers, smokeEgressRules, redactDiagnostic } from './smoke.mjs';
+import { terminateSmokeContainers, smokeEgressRules, redactDiagnostic, diagnosticTail } from './smoke.mjs';
 import { compose } from './compose.mjs';
 
 test('fresh PostgreSQL bootstrap clients and temporary servers share each isolated port and writable default socket', () => {
@@ -31,6 +31,16 @@ test('setup diagnostics redact credentials and bound child stderr', () => {
   const result = redactDiagnostic(raw, [token]);
   for (const privateValue of ['short-secret', 'hidden-bearer', 'user:dbpass', token]) assert.ok(!result.includes(privateValue));
   assert.ok(result.includes('[redacted]'));
+  assert.ok(result.length <= 800);
+  assert.ok(result.split('\n').length <= 6);
+});
+
+test('failure diagnostics retain the final error after progress output and redact its credentials', () => {
+  const token = 'fixture-sensitive-value-0123456789abcdef';
+  const result = diagnosticTail('Container creating\n'.repeat(100) +
+    `Final startup failure password=short-secret Bearer hidden-bearer ${token}\n`, [token]);
+  assert.ok(result.includes('Final startup failure'));
+  for (const secret of ['short-secret', 'hidden-bearer', token]) assert.ok(!result.includes(secret));
   assert.ok(result.length <= 800);
   assert.ok(result.split('\n').length <= 6);
 });
