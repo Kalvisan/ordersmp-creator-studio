@@ -20,7 +20,7 @@ const secret = () => {
   return value;
 };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-export function redactDiagnostic(value, secrets = generatedSecrets) {
+export function redactDiagnostic(value, secrets = generatedSecrets, limit = 800) {
   let text = String(value || '');
   for (const secret of secrets) if (secret) text = text.replaceAll(secret, '[redacted]');
   text = text
@@ -30,17 +30,19 @@ export function redactDiagnostic(value, secrets = generatedSecrets) {
     .replace(/[A-Za-z0-9_-]{32,}/g, '[redacted-value]')
     .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '')
     .split('\n').slice(0, 6).join('\n');
-  return text.length <= 800 ? text : `${text.slice(0, 200)} ... ${text.slice(-595)}`;
+  const prefix = Math.floor(limit / 4);
+  return text.length <= limit ? text : `${text.slice(0, prefix)} ... ${text.slice(-(limit - prefix - 5))}`;
 }
 export function diagnosticTail(value, secrets = generatedSecrets) {
   const lines = String(value || '').trimEnd().split('\n').slice(-6).map(line => {
     try {
       const item = JSON.parse(line);
       if (typeof item.error === 'string') return `${item.level || 'error'}: ${String(item.msg || '')}: ${item.error}`;
+      if (typeof item.msg === 'string') return `${item.level || 'log'}: ${item.msg}`;
     } catch { /* Keep ordinary process diagnostics. */ }
     return line;
   });
-  return redactDiagnostic(lines.join('\n'), secrets);
+  return redactDiagnostic(lines.join('\n'), secrets, 4096);
 }
 function command(executable, args, options = {}) {
   const { combineOutput = false, ...spawnOptions } = options;

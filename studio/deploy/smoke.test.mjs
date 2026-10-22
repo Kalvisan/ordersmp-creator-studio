@@ -41,7 +41,7 @@ test('failure diagnostics retain the final error after progress output and redac
     `Final startup failure password=short-secret Bearer hidden-bearer ${token}\n`, [token]);
   assert.ok(result.includes('Final startup failure'));
   for (const secret of ['short-secret', 'hidden-bearer', token]) assert.ok(!result.includes(secret));
-  assert.ok(result.length <= 800);
+  assert.ok(result.length <= 4096);
   assert.ok(result.split('\n').length <= 6);
 });
 
@@ -54,7 +54,7 @@ test('long structured Go error chains retain their final cause without stacks or
   assert.ok(result.includes('connection refused'));
   assert.ok(!result.includes('short-secret'));
   assert.ok(!result.includes('irrelevant stack'));
-  assert.ok(result.length <= 800);
+  assert.ok(result.length <= 4096);
 });
 
 test('generated smoke firewall parses in an isolated Linux network namespace', { skip: process.platform !== 'linux' }, () => {
