@@ -203,6 +203,18 @@ export class PoliciesGuard implements CanActivate {
       return true;
     }
 
+    // Native owner screens consume arrays from these read-only endpoints.
+    // Returning a permission object instead caused the analytics view to crash.
+    if (controller === 'AnalyticsController') {
+      if (request.method !== 'GET' || !['getIntegration', 'getPostAnalytics'].includes(handler))
+        throw deny();
+      return true;
+    }
+    if (controller === 'AnnouncementsController') {
+      if (request.method !== 'GET' || handler !== 'getAnnouncements') throw deny();
+      return true;
+    }
+
     // Owner reads and connection setup are explicit. Publishing generators,
     // RSS, plugs, arbitrary integration functions, native OAuth apps and
     // anonymous preview/agent endpoints stay closed in this prototype.

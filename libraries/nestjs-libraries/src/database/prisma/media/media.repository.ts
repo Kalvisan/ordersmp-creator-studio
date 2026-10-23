@@ -4,12 +4,12 @@ import { SaveMediaInformationDto } from '@gitroom/nestjs-libraries/dtos/media/sa
 
 @Injectable()
 export class MediaRepository {
-  constructor(private _media: PrismaRepository<'media'>) {}
+  constructor(private _media: PrismaRepository<'media' | 'integration'>) {}
 
-  findRegisteredNativeUpload(org: string, name: string, path: string) {
+  async findRegisteredNativeUpload(org: string, name: string, path: string) {
     // Media.name already has an index. The exact URL and current organisation
     // are also required; no other media metadata is exposed by this lookup.
-    return this._media.model.media.findFirst({
+    const media = await this._media.model.media.findFirst({
       where: {
         organizationId: org,
         name,
@@ -17,6 +17,13 @@ export class MediaRepository {
         deletedAt: null,
         status: { not: 'processing' },
       },
+      select: { id: true },
+    });
+    if (media) return media;
+    // Provider avatars are stored as Integration.picture, not Media records.
+    // The organisation index bounds this exact URL lookup; return no metadata.
+    return this._media.model.integration.findFirst({
+      where: { organizationId: org, picture: path, deletedAt: null },
       select: { id: true },
     });
   }

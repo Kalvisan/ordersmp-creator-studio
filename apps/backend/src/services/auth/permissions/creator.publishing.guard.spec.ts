@@ -379,6 +379,26 @@ describe('Google-only creator and publisher route boundaries', () => {
       guard.canActivate(context(controller, handler, creator()))
     ).rejects.toThrow(ForbiddenException);
   });
+  it.each([
+    ['AnalyticsController', 'getIntegration'],
+    ['AnalyticsController', 'getPostAnalytics'],
+    ['AnnouncementsController', 'getAnnouncements'],
+  ])('allows the owner read screen %s.%s while retaining creator isolation', async (controller, handler) => {
+    const req = { ...request(), method: 'GET' };
+    await expect(guard.canActivate(context(controller, handler, req))).resolves.toBe(true);
+    await expect(guard.canActivate(context(controller, handler, { ...creator(), method: 'GET' })))
+      .rejects.toThrow(ForbiddenException);
+    await expect(guard.canActivate(context(controller, handler, { ...req, method: 'POST' })))
+      .rejects.toThrow(ForbiddenException);
+    req.org.users[0].disabled = true;
+    await expect(guard.canActivate(context(controller, handler, req))).rejects.toThrow(ForbiddenException);
+  });
+  it.each(['createAnnouncement', 'deleteAnnouncement', 'futureHandler'])(
+    'does not grant owner announcement mutation or unknown handler %s', async (handler) => {
+      await expect(guard.canActivate(context('AnnouncementsController', handler, { ...request(), method: 'GET' })))
+        .rejects.toThrow(ForbiddenException);
+    }
+  );
   it('denies official/shared/other-user organisations and missing publisher configuration', async () => {
     const req = creator();
     req.org.id = 'official';

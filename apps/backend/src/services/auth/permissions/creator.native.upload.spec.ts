@@ -56,7 +56,7 @@ jest.mock('@gitroom/nestjs-libraries/dtos/videos/video.function.dto', () => ({
 describe('Exact owner-only native upload registration lookup', () => {
   const previous = { ...process.env };
   const relative = `2026/10/24/${'a'.repeat(32)}.png`;
-  let findFirst: jest.Mock, service: MediaService, controller: MediaController;
+  let findFirst: jest.Mock, findAvatar: jest.Mock, service: MediaService, controller: MediaController;
   const org = () =>
     ({
       id: 'current-org',
@@ -71,8 +71,9 @@ describe('Exact owner-only native upload registration lookup', () => {
       FRONTEND_URL: 'https://studio.example.com',
     };
     findFirst = jest.fn(async () => ({ id: 'registered-id' }));
+    findAvatar = jest.fn(async () => null);
     const repository = new MediaRepository({
-      model: { media: { findFirst } },
+      model: { media: { findFirst }, integration: { findFirst: findAvatar } },
     } as any);
     service = new MediaService(
       repository,
@@ -92,6 +93,7 @@ describe('Exact owner-only native upload registration lookup', () => {
       controller.lookupNativeUpload(org(), owner(), { relative })
     ).resolves.toEqual({ registered: true });
     expect(findFirst).toHaveBeenCalledTimes(1);
+    expect(findAvatar).not.toHaveBeenCalled();
     expect(findFirst).toHaveBeenCalledWith({
       where: {
         organizationId: 'current-org',
@@ -106,6 +108,24 @@ describe('Exact owner-only native upload registration lookup', () => {
     await expect(
       controller.lookupNativeUpload(org(), owner(), { relative })
     ).resolves.toEqual({ registered: false });
+  });
+
+  it('admits only an exact current-organisation avatar after no Media match', async () => {
+    findFirst.mockResolvedValue(null);
+    findAvatar.mockResolvedValue({ id: 'current-channel-avatar' });
+    await expect(controller.lookupNativeUpload(org(), owner(), { relative }))
+      .resolves.toEqual({ registered: true });
+    expect(findAvatar).toHaveBeenCalledWith({
+      where: { organizationId: 'current-org', picture: `https://studio.example.com/uploads/${relative}`, deletedAt: null },
+      select: { id: true },
+    });
+    findAvatar.mockResolvedValue(null);
+    await expect(controller.lookupNativeUpload(org(), owner(), { relative }))
+      .resolves.toEqual({ registered: false });
+    findAvatar.mockClear();
+    await expect(controller.lookupNativeUpload(org(), { ...owner(), email: 'creator@example.com' }, { relative }))
+      .rejects.toThrow(ForbiddenException);
+    expect(findAvatar).not.toHaveBeenCalled();
   });
 
   it.each(['USER', undefined])(
