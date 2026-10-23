@@ -1,18 +1,21 @@
 import { Injectable, NestMiddleware } from '@nestjs/common';
 import { Request, Response, NextFunction } from 'express';
 import { AuthService } from '@gitroom/helpers/auth/auth.service';
-import { User } from '@prisma/client';
+import { Provider, User } from '@prisma/client';
 import { OrganizationService } from '@gitroom/nestjs-libraries/database/prisma/organizations/organization.service';
 import { UsersService } from '@gitroom/nestjs-libraries/database/prisma/users/users.service';
 import { getCookieUrlFromDomain } from '@gitroom/helpers/subdomain/subdomain.management';
 import { HttpForbiddenException } from '@gitroom/nestjs-libraries/services/exception.filter';
 import { MastraService } from '@gitroom/nestjs-libraries/chat/mastra.service';
 import { setSentryUserContext } from '@gitroom/nestjs-libraries/sentry/initialize.sentry';
+import { googleEmailAllowed } from './auth.service';
 
 export const removeAuth = (res: Response) => {
   res.cookie('auth', '', {
-    domain: getCookieUrlFromDomain(process.env.FRONTEND_URL!),
-    ...(!process.env.NOT_SECURED
+    ...(process.env.GOOGLE_ONLY_AUTH === 'true'
+      ? { secure: true, httpOnly: true, sameSite: 'lax' as const, path: '/' }
+      : { domain: getCookieUrlFromDomain(process.env.FRONTEND_URL!) }),
+    ...(!process.env.NOT_SECURED && process.env.GOOGLE_ONLY_AUTH !== 'true'
       ? {
           secure: true,
           httpOnly: true,
@@ -32,6 +35,8 @@ export class AuthMiddleware implements NestMiddleware {
     private _userService: UsersService
   ) {}
   async use(req: Request, res: Response, next: NextFunction) {
+    // Server-rendered pages forward their host-only cookie through this header.
+    // The signed Google-only identity is checked below for either transport.
     const auth = req.headers.auth || req.cookies.auth;
     if (!auth) {
       throw new HttpForbiddenException();
@@ -40,16 +45,35 @@ export class AuthMiddleware implements NestMiddleware {
       // Verify the JWT signature only. Never trust authorization-relevant
       // claims (id, isSuperAdmin, activated) from the token body — always
       // re-resolve the user from the database using the id.
-      const payload = AuthService.verifyJWT(auth) as User | null;
+      const payload = AuthService.verifyJWT(auth) as
+        | (User & {
+            authMethod?: string;
+            googleSub?: string;
+          })
+        | null;
       const orgHeader = req.cookies.showorg || req.headers.showorg;
 
       if (!payload?.id) {
         throw new HttpForbiddenException();
       }
 
-      let user = (await this._userService.getUserById(payload.id)) as User | null;
+      let user = (await this._userService.getUserById(
+        payload.id
+      )) as User | null;
 
       if (!user) {
+        throw new HttpForbiddenException();
+      }
+
+      if (
+        process.env.GOOGLE_ONLY_AUTH === 'true' &&
+        (payload.authMethod !== 'google-only' ||
+          user.providerName !== Provider.GOOGLE ||
+          !payload.googleSub ||
+          payload.googleSub !== user.providerId ||
+          payload.email?.toLowerCase() !== user.email.toLowerCase() ||
+          !googleEmailAllowed(user.email))
+      ) {
         throw new HttpForbiddenException();
       }
 
@@ -57,7 +81,10 @@ export class AuthMiddleware implements NestMiddleware {
         throw new HttpForbiddenException();
       }
 
-      const impersonate = req.cookies.impersonate || req.headers.impersonate;
+      const impersonate =
+        process.env.GOOGLE_ONLY_AUTH === 'true'
+          ? undefined
+          : req.cookies.impersonate || req.headers.impersonate;
       if (user?.isSuperAdmin && impersonate) {
         const loadImpersonate = await this._organizationService.getUserOrg(
           impersonate

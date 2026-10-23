@@ -1,5 +1,6 @@
 import { BadRequestException, HttpException, Injectable } from '@nestjs/common';
 import { MediaRepository } from '@gitroom/nestjs-libraries/database/prisma/media/media.repository';
+import { NATIVE_UPLOAD_RELATIVE_PATH } from '@gitroom/nestjs-libraries/dtos/media/get.native.upload.dto';
 import { OpenaiService } from '@gitroom/nestjs-libraries/openai/openai.service';
 import { generationError } from '@gitroom/nestjs-libraries/openai/generation.error';
 import { SubscriptionService } from '@gitroom/nestjs-libraries/database/prisma/subscriptions/subscription.service';
@@ -460,6 +461,33 @@ export class MediaService {
 
   getMedia(org: string, page: number, search?: string) {
     return this._mediaRepository.getMedia(org, page, search);
+  }
+
+  async isRegisteredNativeUpload(org: string, relative: string) {
+    if (
+      typeof relative !== 'string' ||
+      relative.trim() !== relative ||
+      !NATIVE_UPLOAD_RELATIVE_PATH.test(relative)
+    ) {
+      throw new BadRequestException('Invalid native media path');
+    }
+    const origin = new URL(process.env.FRONTEND_URL!);
+    if (
+      origin.protocol !== 'https:' ||
+      origin.username ||
+      origin.password ||
+      origin.pathname !== '/' ||
+      origin.search ||
+      origin.hash
+    ) {
+      throw new BadRequestException('Native media is unavailable');
+    }
+    const path = new URL(`/uploads/${relative}`, origin).href;
+    return !!(await this._mediaRepository.findRegisteredNativeUpload(
+      org,
+      relative.split('/').pop()!,
+      path
+    ));
   }
 
   saveMediaInformation(org: string, data: SaveMediaInformationDto) {

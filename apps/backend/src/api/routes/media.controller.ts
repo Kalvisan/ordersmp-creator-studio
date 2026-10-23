@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Param,
   Post,
@@ -14,7 +15,10 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { GetOrgFromRequest } from '@gitroom/nestjs-libraries/user/org.from.request';
-import { Organization } from '@prisma/client';
+import { Organization, User } from '@prisma/client';
+import type { Role } from '@prisma/client';
+import { GetUserFromRequest } from '@gitroom/nestjs-libraries/user/user.from.request';
+import { GetNativeUploadDto } from '@gitroom/nestjs-libraries/dtos/media/get.native.upload.dto';
 import { MediaService } from '@gitroom/nestjs-libraries/database/prisma/media/media.service';
 import { ApiTags } from '@nestjs/swagger';
 import handleR2Upload from '@gitroom/nestjs-libraries/upload/r2.uploader';
@@ -186,6 +190,34 @@ export class MediaController {
     return this._mediaService.getMediaStatus(org.id, id);
   }
 
+  @Get('/native-upload')
+  async lookupNativeUpload(
+    @GetOrgFromRequest()
+    org: Organization & { users: { role: Role; disabled?: boolean }[] },
+    @GetUserFromRequest() user: User,
+    @Query() query: GetNativeUploadDto
+  ) {
+    const owner = process.env.GOOGLE_AUTH_OWNER_EMAIL?.trim().toLowerCase();
+    const member = org.users?.[0];
+    if (
+      process.env.GOOGLE_ONLY_AUTH !== 'true' ||
+      !owner ||
+      user.email?.trim().toLowerCase() !== owner ||
+      member?.disabled ||
+      !['ADMIN', 'SUPERADMIN'].includes(member?.role)
+    ) {
+      throw new ForbiddenException(
+        'Only the channel owner can read native uploads'
+      );
+    }
+    return {
+      registered: await this._mediaService.isRegisteredNativeUpload(
+        org.id,
+        query.relative
+      ),
+    };
+  }
+
   @Get('/')
   getMedia(
     @GetOrgFromRequest() org: Organization,
@@ -201,10 +233,12 @@ export class MediaController {
   }
 
   @Post('/video/function')
-  videoFunction(
-    @Body() body: VideoFunctionDto
-  ) {
-    return this._mediaService.videoFunction(body.identifier, body.functionName, body.params);
+  videoFunction(@Body() body: VideoFunctionDto) {
+    return this._mediaService.videoFunction(
+      body.identifier,
+      body.functionName,
+      body.params
+    );
   }
 
   @Get('/generate-video/:type/allowed')

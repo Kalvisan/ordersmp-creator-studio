@@ -1,0 +1,30 @@
+.capability-page .order-eye {
+  width: 64px;
+  height: 64px;
+  margin-bottom: 18px;
+}
+.capability-brand {
+  margin: 0 0 28px;
+  font: 18px/1.5 'Order Pixel', system-ui, sans-serif;
+}
+.capability-page h1 {
+  margin-bottom: 18px;
+  font: 600 28px/1.3 system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+.capability-copy {
+  margin: 0 0 28px;
+  color: #bfae8a;
+}
+.capability-action {
+  display: inline-block;
+  padding: 14px 18px;
+  border: 1px solid #c8102e;
+  background: #7a0a1e;
+  color: #f3e6c4;
+  font-size: 16px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.capability-action:hover {
+  border-color: #f3e6c4;
+}

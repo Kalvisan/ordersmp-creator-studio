@@ -82,7 +82,7 @@ async function start() {
   const port = process.env.PORT || 3000;
 
   try {
-    await app.listen(port);
+    await app.listen(port, process.env.GOOGLE_ONLY_AUTH === 'true' ? '127.0.0.1' : '0.0.0.0');
     console.log('Backend started successfully on port ' + port);
 
     checkConfiguration(); // Do this last, so that users will see obvious issues at the end of the startup log without having to scroll up.

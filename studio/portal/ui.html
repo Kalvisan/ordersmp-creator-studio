@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Creator Studio | OrderSMP</title>
+    <link rel="icon" href="/brand/logo.png" type="image/png" />
+    <link rel="stylesheet" href="/creator/portal.css" />
+    <script type="module" src="/creator/portal.js"></script>
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to preview</a>
+    <header class="app-bar">
+      <a class="brand" href="/creator"
+        ><img src="/brand/logo.png" alt="" width="30" height="30" /><span
+          >OrderSMP</span
+        ><span class="app-name">Creator Studio</span></a
+      >
+      <nav aria-label="Studio">
+        <span id="session" class="session">Connecting...</span
+        ><a id="native-workspace" href="/launches" hidden
+          >Publishing workspace</a
+        ><button id="queue-open" class="quiet" type="button" hidden>
+          Publishing queue</button
+        ><button id="refresh" class="quiet" type="button">Refresh</button>
+      </nav>
+    </header>
+    <div
+      id="notice"
+      class="notice"
+      role="status"
+      aria-live="polite"
+      hidden
+    ></div>
+    <div class="workspace">
+      <aside
+        id="library-panel"
+        class="library panel"
+        aria-labelledby="library-heading"
+      >
+        <div class="panel-heading">
+          <h2 id="library-heading">Recordings</h2>
+          <button
+            class="drawer-close quiet"
+            data-close-panel
+            type="button"
+            aria-label="Close library"
+          >
+            Close
+          </button>
+        </div>
+        <button id="import" class="import-button" type="button">
+          <span aria-hidden="true">+</span> Import video
+        </button>
+        <input
+          id="file"
+          type="file"
+          accept="video/mp4,video/quicktime,video/x-matroska,.mkv"
+          hidden
+        />
+        <div id="drop-zone" class="drop-zone">
+          <span>Drop a recording here</span
+          ><small>MP4, MOV or MKV · Up to 90 MiB</small>
+        </div>
+        <div id="upload-status" class="upload-status" hidden>
+          <span id="upload-label">Uploading...</span
+          ><progress
+            id="progress"
+            max="100"
+            value="0"
+            aria-label="Upload progress"
+          ></progress>
+        </div>
+        <div id="recordings" class="media-list" aria-live="polite">
+          <p class="empty-copy">Loading your recordings...</p>
+        </div>
+        <a
+          class="source-link"
+          href="https://github.com/Kalvisan/ordersmp-creator-studio/tree/feature/ordersmp-creator-studio"
+          >Source and licence</a
+        >
+      </aside>
+      <main id="main" class="editor" tabindex="-1">
+        <div class="editor-bar">
+          <button
+            id="library-open"
+            class="mobile-tool quiet"
+            type="button"
+            aria-controls="library-panel"
+            aria-expanded="false"
+          >
+            Recordings
+          </button>
+          <h1 id="selected-title">Your next clip starts here</h1>
+          <button
+            id="inspector-open"
+            class="mobile-tool quiet"
+            type="button"
+            aria-controls="inspector-panel"
+            aria-expanded="false"
+          >
+            Details
+          </button>
+        </div>
+        <ol id="stages" class="stages" aria-label="Clip workflow">
+          <li>Import</li>
+          <li>Permission</li>
+          <li>Clip</li>
+          <li>Draft</li>
+        </ol>
+        <section class="canvas" aria-label="Video preview">
+          <video
+            id="preview"
+            controls
+            playsinline
+            preload="metadata"
+            hidden
+          ></video>
+          <div id="empty-preview" class="empty-preview">
+            <span class="empty-symbol" aria-hidden="true">▷</span>
+            <h2>A place for your recordings.</h2>
+            <p>Import a video, choose a moment and make a draft.</p>
+            <button id="empty-import" type="button" class="primary">
+              Import video
+            </button>
+          </div>
+          <p id="preview-error" class="preview-error" role="status" hidden></p>
+        </section>
+        <section
+          id="trim-panel"
+          class="trim-panel"
+          aria-labelledby="trim-heading"
+          hidden
+        >
+          <div class="section-line">
+            <h2 id="trim-heading">Clip range</h2>
+            <output id="playhead">Duration loads with the preview</output>
+          </div>
+          <div class="trim-track">
+            <label
+              >In<input
+                id="start-range"
+                type="range"
+                min="0"
+                max="60"
+                value="0"
+                step="0.1"
+                disabled /></label
+            ><label
+              >Out<input
+                id="end-range"
+                type="range"
+                min="0"
+                max="60"
+                value="30"
+                step="0.1"
+                disabled
+            /></label>
+          </div>
+          <div class="trim-values">
+            <label
+              >Start
+              <input
+                id="trim-start"
+                type="number"
+                min="0"
+                max="43200"
+                step="0.1"
+                placeholder="0.0"
+              />
+              s</label
+            ><button id="set-in" class="quiet" type="button">
+              Set at playhead</button
+            ><label
+              >End
+              <input
+                id="trim-end"
+                type="number"
+                min="0"
+                max="43200"
+                step="0.1"
+                placeholder="30.0"
+              />
+              s</label
+            ><button id="set-out" class="quiet" type="button">
+              Set at playhead</button
+            ><button id="preview-range" class="quiet" type="button">
+              Play range</button
+            ><output id="range-length"></output>
+          </div>
+          <p id="trim-error" class="hint" role="status">
+            Choose 3 to 60 seconds.
+          </p>
+        </section>
+        <div class="action-bar">
+          <p id="job-status" role="status">
+            Your recordings stay private until an owner approves a post.
+          </p>
+          <button id="primary-action" class="primary" type="button" disabled>
+            Import a recording
+          </button>
+        </div>
+        <section class="drafts-panel" aria-labelledby="drafts-heading">
+          <div class="section-line">
+            <h2 id="drafts-heading">
+              Clip drafts <span id="draft-count">0</span>
+            </h2>
+            <span class="hint">Select a draft to preview and edit</span>
+          </div>
+          <div id="drafts" class="draft-strip">
+            <p class="empty-copy">Your prepared clips will appear here.</p>
+          </div>
+        </section>
+      </main>
+      <aside
+        id="inspector-panel"
+        class="inspector panel"
+        aria-labelledby="inspector-heading"
+      >
+        <div class="panel-heading">
+          <h2 id="inspector-heading">Details</h2>
+          <button
+            class="drawer-close quiet"
+            data-close-panel
+            type="button"
+            aria-label="Close details"
+          >
+            Close
+          </button>
+        </div>
+        <div id="inspector">
+          <p class="empty-copy">Choose a recording to see its details.</p>
+        </div>
+      </aside>
+    </div>
+    <button
+      id="drawer-backdrop"
+      class="drawer-backdrop"
+      type="button"
+      aria-label="Close side panel"
+      hidden
+    ></button>
+    <dialog id="publishing-dialog" aria-labelledby="publishing-title">
+      <div class="dialog-heading">
+        <h2 id="publishing-title">Owner publishing review</h2>
+        <button id="queue-close" class="quiet" type="button">Close</button>
+      </div>
+      <div id="owner-review"></div>
+      <h3>Publishing queue</h3>
+      <p class="hint">
+        Times use your local time zone. Published means a platform result is
+        recorded.
+      </p>
+      <div id="calendar"></div>
+    </dialog>
+  </body>
+</html>

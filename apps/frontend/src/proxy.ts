@@ -15,8 +15,9 @@ export async function proxy(request: NextRequest) {
   const nextUrl = request.nextUrl;
   const authCookie =
     request.cookies.get('auth') ||
-    request.headers.get('auth') ||
-    nextUrl.searchParams.get('loggedAuth');
+    (process.env.GOOGLE_ONLY_AUTH === 'true'
+      ? undefined
+      : request.headers.get('auth') || nextUrl.searchParams.get('loggedAuth'));
   const lng = request.cookies.has(cookieName)
     ? acceptLanguage.get(request.cookies.get(cookieName).value)
     : acceptLanguage.get(
@@ -77,7 +78,9 @@ export async function proxy(request: NextRequest) {
           }
         : {}),
       maxAge: -1,
-      domain: getCookieUrlFromDomain(process.env.FRONTEND_URL!),
+      ...(process.env.GOOGLE_ONLY_AUTH === 'true'
+        ? { secure: true, httpOnly: true, sameSite: 'lax' as const }
+        : { domain: getCookieUrlFromDomain(process.env.FRONTEND_URL!) }),
     });
     return response;
   }
@@ -121,8 +124,12 @@ export async function proxy(request: NextRequest) {
               path: '/',
               secure: true,
               httpOnly: true,
-              sameSite: false,
-              domain: getCookieUrlFromDomain(process.env.FRONTEND_URL!),
+              ...(process.env.GOOGLE_ONLY_AUTH === 'true'
+                ? { sameSite: 'lax' as const }
+                : {
+                    sameSite: false as const,
+                    domain: getCookieUrlFromDomain(process.env.FRONTEND_URL!),
+                  }),
             }
           : {}),
         expires: new Date(Date.now() + 15 * 60 * 1000),
@@ -132,6 +139,10 @@ export async function proxy(request: NextRequest) {
     return topResponse;
   }
   try {
+    if (org && process.env.GOOGLE_ONLY_AUTH === 'true') {
+      // In this mode an invitation admits a creator to their private workspace.
+      return NextResponse.redirect(new URL('/', nextUrl.href));
+    }
     if (org) {
       const { id } = await (
         await internalFetch('/user/join-org', {
