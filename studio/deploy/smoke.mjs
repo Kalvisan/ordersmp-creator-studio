@@ -280,6 +280,26 @@ export async function smoke(artifactRoot) {
     assert.doesNotMatch(login.body, /<form\b|<input\b|<style\b|<script(?![^>]*\bsrc=)/i);
     assert.equal(request('/auth/login.css').status, 200);
     assert.equal(request('/auth/login.mjs').status, 200);
+    for (const path of ['/agents', '/agents/', '/agents/new', '/agents/old/edit?next=https://unexpected.invalid/']) {
+      for (const args of [[], ['--head'], ['--header', 'RSC: 1', '--header', 'Next-Router-Prefetch: 1']]) {
+        const redirect = request(path, args);
+        assert.equal(redirect.status, 302);
+        assert.match(redirect.headers, /\r?\nlocation: \/creator\/agents\r?\n/i);
+      }
+      for (const method of ['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])
+        assert.equal(request(path, ['--request', method]).status, 405);
+    }
+    for (const args of [[], ['--head'], ['--header', 'Cookie: auth=invalid-smoke-session']]) {
+      const agents = request('/creator/agents', args);
+      assert.equal(agents.status, 303);
+      assert.match(agents.headers, /location: \/auth\/login/i);
+      assert.doesNotMatch(agents.body, /AI agents are not enabled/);
+    }
+    assert.equal(request('/creator/agents.css').status, 401);
+    assert.ok([401, 403].includes(request('/api/copilot/list').status));
+    assert.ok([401, 403].includes(request('/api/copilot/agent', ['--header',
+      'Content-Type: application/json', '--data', JSON.stringify({ method: 'info' })]).status));
+    report.checks.push('Agents routes redirect to the authenticated unavailable page; writes and anonymous AI access denied');
     assert.throws(() => request('/auth/login', [], 'unexpected.invalid'), error => error.diagnostic?.exitCode === 52);
     assert.equal(request('/api/uploads/smoke.mp4').status, 403);
     assert.equal(request('/uploads/smoke.mp4').status, 401);

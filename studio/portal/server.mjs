@@ -232,12 +232,31 @@ export class PortalController {
       } catch (error) {
         if (
           error.status === 401 &&
-          ['/creator', '/creator/'].includes(url.pathname)
+          ['/creator', '/creator/', '/creator/agents'].includes(url.pathname)
         ) {
           response.writeHead(303, { Location: '/auth/login' });
           return response.end();
         }
         throw error;
+      }
+      const agentFiles = {
+        '/creator/agents': ['agents.html', 'text/html; charset=utf-8'],
+        '/creator/agents.css': ['agents.css', 'text/css; charset=utf-8'],
+      };
+      if (Object.hasOwn(agentFiles, url.pathname)) {
+        if (!['GET', 'HEAD'].includes(request.method))
+          fail('Method not allowed', 405);
+        response.setHeader(
+          'Content-Security-Policy',
+          "default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'"
+        );
+        const [file, type] = agentFiles[url.pathname];
+        const content = await readFile(new URL(file, import.meta.url));
+        response.writeHead(200, {
+          'Content-Type': type,
+          'Content-Length': content.length,
+        });
+        return response.end(request.method === 'HEAD' ? undefined : content);
       }
       if (
         !['GET', 'HEAD'].includes(request.method) &&
