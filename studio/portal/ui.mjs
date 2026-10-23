@@ -379,7 +379,7 @@ export function createWorkspace(document, window) {
       handle = field('Creator credit', 'input', {
         required: '',
         maxlength: '41',
-        pattern: '@[A-Za-z0-9_.-]{1,40}',
+        pattern: '@[A-Za-z0-9_.\\-]{1,40}',
         placeholder: '@creator',
         autocomplete: 'off',
       });

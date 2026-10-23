@@ -151,6 +151,22 @@ async function setup(t, owner = true) {
   return { window, calls, fixture, workspace, $, button, enter };
 }
 
+test('creator credit validates real handle characters under the browser Unicode-sets pattern rules', async (t) => {
+  const { window } = await setup(t);
+  const handle = [...window.document.querySelectorAll('label')]
+    .find((node) => node.textContent === 'Creator credit')
+    .querySelector('input');
+  assert.doesNotThrow(() => new RegExp(handle.pattern, 'v'));
+  for (const value of ['@b1oeorblue', '@creator-name', '@creator.name', '@Creator_1']) {
+    handle.value = value;
+    assert.equal(handle.checkValidity(), true, value);
+  }
+  for (const value of ['creator', '@', '@bad handle', '@a/b', '@' + 'a'.repeat(41)]) {
+    handle.value = value;
+    assert.equal(handle.checkValidity(), false, value);
+  }
+});
+
 test('actual visual workspace preserves caption edits, uses existing publishing contracts and keeps unsafe credit unapproved', async (t) => {
   const app = await setup(t),
     { window, calls, workspace, $, button, enter } = app;
@@ -164,7 +180,6 @@ test('actual visual workspace preserves caption edits, uses existing publishing 
     .find((node) => node.textContent === 'Creator credit')
     .querySelector('input');
   assert.equal(handle.value, '@b1oeorblue');
-  assert.equal(handle.pattern, '@[A-Za-z0-9_.-]{1,40}');
   window.document.querySelector('.draft-tile').click();
   await until(() => Boolean(button('Review publishing schedule')));
   const caption = [...window.document.querySelectorAll('label')]
