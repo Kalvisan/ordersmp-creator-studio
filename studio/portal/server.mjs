@@ -115,6 +115,26 @@ export class PortalController {
     );
     try {
       const url = new URL(request.url, this.origin);
+      const loginFiles = {
+        '/auth/login': ['login.html', 'text/html; charset=utf-8'],
+        '/auth/login.css': ['login.css', 'text/css; charset=utf-8'],
+        '/auth/login.mjs': ['login.mjs', 'text/javascript; charset=utf-8'],
+      };
+      if (Object.hasOwn(loginFiles, url.pathname)) {
+        if (!['GET', 'HEAD'].includes(request.method))
+          fail('Method not allowed', 405);
+        response.setHeader(
+          'Content-Security-Policy',
+          "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'"
+        );
+        const [file, type] = loginFiles[url.pathname];
+        const content = await readFile(new URL(file, import.meta.url));
+        response.writeHead(200, {
+          'Content-Type': type,
+          'Content-Length': content.length,
+        });
+        return response.end(request.method === 'HEAD' ? undefined : content);
+      }
       if (url.pathname === '/creator/health' && request.method === 'GET')
         return json(response, 200, { ok: true });
       if (url.pathname.startsWith('/creator-media/')) {
@@ -164,13 +184,23 @@ export class PortalController {
       const branding = {
         '/brand/logo.png': ['order-logo.png', 'image/png'],
         '/brand/order-pixel.ttf': ['order-pixel.ttf', 'font/ttf'],
+        // Google's pre-approved PNG button preserves its logo, type and spacing.
+        // https://developers.google.com/identity/branding-guidelines
+        '/brand/google-sign-in.png': ['google-sign-in.png', 'image/png'],
       };
-      if (request.method === 'GET' && branding[url.pathname]) {
+      if (
+        ['GET', 'HEAD'].includes(request.method) &&
+        Object.hasOwn(branding, url.pathname)
+      ) {
         const [file, type] = branding[url.pathname];
-        response.writeHead(200, { 'Content-Type': type });
-        return response.end(
-          await readFile(new URL(`../assets/${file}`, import.meta.url))
+        const content = await readFile(
+          new URL(`../assets/${file}`, import.meta.url)
         );
+        response.writeHead(200, {
+          'Content-Type': type,
+          'Content-Length': content.length,
+        });
+        return response.end(request.method === 'HEAD' ? undefined : content);
       }
       if (url.pathname === '/creator/internal/jobs') {
         if (!(await workerAuthorized(request, this.workerTokenFile)))

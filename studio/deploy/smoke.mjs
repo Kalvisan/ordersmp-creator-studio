@@ -275,6 +275,11 @@ export async function smoke(artifactRoot) {
     assert.equal(portal.status, 303); assert.match(portal.headers, /location: \/auth\/login/i);
     const login = request('/auth/login');
     assert.equal(login.status, 200); assert.match(login.body, /Sign in with Google/);
+    assert.match(login.body, /OrderSMP/);
+    assert.equal((login.body.match(/<button\b/g) || []).length, 1);
+    assert.doesNotMatch(login.body, /<form\b|<input\b|<style\b|<script(?![^>]*\bsrc=)/i);
+    assert.equal(request('/auth/login.css').status, 200);
+    assert.equal(request('/auth/login.mjs').status, 200);
     assert.throws(() => request('/auth/login', [], 'unexpected.invalid'), error => error.diagnostic?.exitCode === 52);
     assert.equal(request('/api/uploads/smoke.mp4').status, 403);
     assert.equal(request('/uploads/smoke.mp4').status, 401);

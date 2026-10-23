@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Sign in | OrderSMP Creator Studio</title>
+    <link rel="icon" href="/brand/logo.png" type="image/png" />
+    <link rel="stylesheet" href="/auth/login.css" />
+    <script type="module" src="/auth/login.mjs"></script>
+  </head>
+  <body>
+    <main class="checkpoint" aria-labelledby="studio-title">
+      <img
+        class="order-eye"
+        src="/brand/logo.png"
+        width="136"
+        height="136"
+        alt=""
+      />
+      <h1 id="studio-title">OrderSMP<span>Creator Studio</span></h1>
+      <p class="intro">Sign in to work on your recordings and clips.</p>
+      <p class="access">Use a Google account approved by the owner.</p>
+      <button
+        id="google-sign-in"
+        type="button"
+        aria-describedby="sign-in-error"
+        disabled
+      >
+        <img
+          src="/brand/google-sign-in.png"
+          width="354"
+          height="80"
+          alt="Sign in with Google"
+        />
+      </button>
+      <p id="sign-in-error" class="error" role="alert" hidden></p>
+      <noscript
+        ><p class="error">
+          Turn on JavaScript to sign in with Google.
+        </p></noscript
+      >
+    </main>
+    <footer>
+      <a href="https://ordersmp.net/">OrderSMP</a>
+      <a
+        href="https://github.com/Kalvisan/ordersmp-creator-studio/tree/feature/ordersmp-creator-studio"
+        rel="noopener noreferrer"
+        >Source code (AGPL-3.0)</a
+      >
+    </footer>
+  </body>
+</html>

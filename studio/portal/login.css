@@ -1,0 +1,132 @@
+@font-face {
+  font-family: 'Order Pixel';
+  src: url('/brand/order-pixel.ttf') format('truetype');
+  font-display: swap;
+}
+:root {
+  color-scheme: dark;
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  color: #f3e6c4;
+  background: #1a1a1a;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  min-height: 100svh;
+  margin: 0;
+  padding: 48px 20px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.checkpoint {
+  width: 100%;
+  max-width: 480px;
+  padding: 36px 40px 40px;
+  border: 2px solid #7a0a1e;
+  border-top: 6px solid #c8102e;
+  background: #1a1a1a;
+  box-shadow: 6px 6px 0 #100e0e;
+  text-align: center;
+}
+.order-eye {
+  display: block;
+  margin: 0 auto 24px;
+  image-rendering: pixelated;
+}
+h1 {
+  margin: 0 0 24px;
+  font: 38px/1.2 'Order Pixel', system-ui, sans-serif;
+}
+h1 span {
+  display: block;
+  margin-top: 12px;
+  font-size: 24px;
+}
+p {
+  font-size: 16px;
+  line-height: 1.6;
+}
+.intro {
+  max-width: 30ch;
+  margin: 0 auto 12px;
+}
+.access {
+  max-width: 30ch;
+  margin: 0 auto 28px;
+  color: #bfae8a;
+  font-size: 14px;
+}
+button {
+  display: block;
+  max-width: 100%;
+  margin: 0 auto;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+button img {
+  display: block;
+  width: 266px;
+  max-width: 100%;
+  height: auto;
+}
+button:hover {
+  box-shadow: 0 0 0 2px #f3e6c4;
+}
+button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+:focus-visible {
+  outline: 3px solid #ffcc28;
+  outline-offset: 5px;
+}
+.error {
+  max-width: 34ch;
+  margin: 24px auto 0;
+  color: #ffb5ba;
+  font-size: 14px;
+}
+[hidden] {
+  display: none;
+}
+footer {
+  width: 100%;
+  max-width: 480px;
+  margin-top: 28px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 12px;
+}
+a {
+  color: #bfae8a;
+  text-underline-offset: 4px;
+}
+a:hover {
+  color: #f3e6c4;
+}
+@media (max-width: 420px) {
+  body {
+    padding: 24px 16px;
+  }
+  .checkpoint {
+    padding: 28px 24px 32px;
+  }
+  .order-eye {
+    width: 112px;
+    height: 112px;
+  }
+  h1 {
+    font-size: 32px;
+  }
+  h1 span {
+    font-size: 21px;
+  }
+}
