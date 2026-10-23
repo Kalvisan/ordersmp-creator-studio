@@ -295,8 +295,8 @@ nav a {
 }
 .canvas {
   margin: 0 22px;
-  min-height: 300px;
-  height: clamp(280px, 43vw, 530px);
+  min-height: 240px;
+  height: clamp(240px, calc(100svh - 440px), 530px);
   display: grid;
   place-items: center;
   background: #111;
@@ -642,7 +642,7 @@ dialog video {
     grid-template-columns: 260px minmax(0, 1fr) 320px;
   }
   .canvas {
-    height: 58vh;
+    height: clamp(240px, calc(100svh - 440px), 700px);
     max-height: 700px;
   }
   .canvas video {
