@@ -320,7 +320,16 @@ test('real HTTP routes require Google session, exact write Origin and separate w
     headers: { cookie: 'auth=valid' },
   });
   assert.equal(page.status, 200);
-  assert.match(await page.text(), /href="\/launches">Publishing workspace<\/a/);
+  const pageBody = await page.text();
+  assert.match(pageBody, /id="native-workspace"[^>]*href="\/launches"[^>]*hidden/);
+  assert.match(pageBody, /aria-label="Clip workflow"/);
+  assert.match(pageBody, /id="preview"/);
+  assert.match(pageBody, /id="trim-start"/);
+  assert.match(pageBody, /id="trim-end"/);
+  const policy = page.headers.get('content-security-policy');
+  assert.match(policy, /media-src 'self' blob:/);
+  assert.match(policy, /script-src 'self';/);
+  assert.doesNotMatch(policy, /script-src[^;]*blob:|unsafe-inline|unsafe-eval/);
   const script = await fetch(`${base}/creator/portal.js`, {
     headers: { cookie: 'auth=valid' },
   });
