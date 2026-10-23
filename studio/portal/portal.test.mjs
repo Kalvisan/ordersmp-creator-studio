@@ -316,6 +316,22 @@ test('real HTTP routes require Google session, exact write Origin and separate w
   );
   const base = `http://127.0.0.1:${server.address().port}`;
   assert.equal((await fetch(`${base}/creator/api/session`)).status, 401);
+  const page = await fetch(`${base}/creator/`, {
+    headers: { cookie: 'auth=valid' },
+  });
+  assert.equal(page.status, 200);
+  assert.match(await page.text(), /href="\/launches">Publishing workspace<\/a/);
+  const script = await fetch(`${base}/creator/portal.js`, {
+    headers: { cookie: 'auth=valid' },
+  });
+  assert.equal(script.status, 200);
+  const interfaceCode = await script.text();
+  assert.ok(
+    interfaceCode.includes(
+      'I own this recording or have permission to share and edit it.'
+    )
+  );
+  assert.doesNotMatch(interfaceCode, /written permission/);
   assert.equal(
     (
       await fetch(`${base}/creator/api/sources`, {

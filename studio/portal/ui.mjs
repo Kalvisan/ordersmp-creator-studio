@@ -90,7 +90,7 @@ function showRecording(source) {
     })
   );
   const confirm = check(
-      'I own this recording or have written permission to share and edit it.'
+      'I own this recording or have permission to share and edit it.'
     ),
     editing = check('OrderSMP may edit this recording into clips.'),
     monetization = check('OrderSMP may monetize these posts.');
