@@ -4,8 +4,9 @@ This is an AGPL modification of Postiz v2.25.1, with a private recording portal,
 Google-only sign-in, creator isolation, reviewed scheduling and draft-only MCP.
 The source of this modified network service is available in this repository.
 
-`studio.ordersmp.net` is the private website. Use WireGuard first, then sign in
-with an invited Google account. Creators upload their own recordings, record
+Open `https://studio.ordersmp.net/` and sign in with an approved Google account.
+The current exact email list is checked on every authenticated request;
+invitations do not grant admission. Creators upload their own recordings, record
 permission and credit, prepare clips and submit drafts. Only the configured
 owner can connect official accounts and approve their exact destination,
 words, media and time. TikTok stays a manual handoff until an approved route
@@ -48,8 +49,10 @@ is a separate event integration, not a capability of an incoming webhook.
 
 ## Recording workflow
 
-Upload an MP4, WebM or MKV, up to 20 GiB and twelve hours. Storage admission
-is capped at 100 GiB, including partial uploads and reserved renders. Supply
+The public upload route accepts MP4, WebM or MKV files up to 90 MiB. Large VODs
+still need a resumable upload path; the worker's 20 GiB internal limit does not
+make those public uploads work. Storage admission is capped at 100 GiB,
+including partial uploads and reserved renders. Supply
 3–60 second ranges, or let the worker suggest up to three loud moments.
 Suggestions require review; volume is not a judgement of story quality.
 An already prepared 1080×1920 Short keeps its frame rate, up to 60 fps, while
@@ -70,5 +73,6 @@ native Node tests under `studio/portal` and `studio/publishing`, and the worker
 Python unit tests. They cover denied identities, role/API bypasses, ownership,
 changed content, revoked permissions, replay, private media, HTTP MCP and
 uncertain publication. Mocked provider tests do not prove a live OAuth grant
-or successful upload. Linux image startup, real VPN denial, Google sign-in,
-backups and first scheduled publication must be recorded separately.
+or successful upload. Record Linux startup, public ingress, real Google sign-in,
+provider grants, backup restoration and publication separately from local tests.
+The first supplied-video batch is drafts only; registration is not API approval.

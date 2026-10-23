@@ -15,7 +15,7 @@ import {
 
 export const endpoint = 'https://studio.ordersmp.net/creator/mcp';
 export const unavailableMessage =
-  'OrderSMP draft MCP is unavailable. Check the VPN and protected credential setup.';
+  'OrderSMP draft MCP is unavailable. Check the connection and protected credential setup.';
 const credentialFailure = () => new Error(unavailableMessage);
 const allowed = new Set(['list_integrations', 'list_drafts', 'create_draft']);
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
